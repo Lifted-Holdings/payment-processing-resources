@@ -14,6 +14,13 @@ VERSION = "1.0.0"
 RELEASE_DATE = "2026-08-02"
 DOI = "10.5281/zenodo.21761715"
 DOI_URL = f"https://doi.org/{DOI}"
+CONCEPT_DOI_URL = "https://doi.org/10.5281/zenodo.21761714"
+RELEASE_URL = (
+    "https://github.com/Lifted-Holdings/payment-processing-resources/"
+    "releases/tag/v1.0.0"
+)
+HUGGING_FACE_REPO_ID = "liftedpayments/payment-statement-audit-model"
+KAGGLE_DATASET_ID = "liftedpayments/payment-statement-audit-model"
 
 
 class ReleaseAssetTests(unittest.TestCase):
@@ -152,6 +159,47 @@ class ReleaseAssetTests(unittest.TestCase):
             "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.0.0",
             llms,
         )
+
+    def test_huggingface_dataset_card_matches_release_identity(self):
+        card_path = ROOT / "distribution/huggingface/README.md"
+        self.assertTrue(card_path.is_file(), "Hugging Face dataset card is missing")
+        card = card_path.read_text(encoding="utf-8")
+        self.assertTrue(card.startswith("---\n"))
+        _, frontmatter, body = card.split("---", maxsplit=2)
+
+        self.assertRegex(frontmatter, r"(?m)^license: cc-by-4\.0$")
+        self.assertRegex(
+            frontmatter, rf'(?m)^pretty_name: "{re.escape(TITLE)}"$'
+        )
+        self.assertRegex(frontmatter, r"(?m)^- en$")
+        for tag in ("tabular", "finance", "payments", "merchant-services"):
+            self.assertRegex(frontmatter, rf"(?m)^- {re.escape(tag)}$")
+
+        for identity_url in (CANONICAL_URL, DOI_URL, CONCEPT_DOI_URL, RELEASE_URL):
+            self.assertIn(identity_url, body)
+        self.assertIn(VERSION, body)
+        self.assertIn("synthetic", body.lower())
+        self.assertIn("no real merchant", body.lower())
+
+    def test_kaggle_distribution_metadata_matches_release_identity(self):
+        metadata_path = ROOT / "distribution/kaggle/dataset-metadata.json"
+        description_path = ROOT / "distribution/kaggle/README.md"
+        self.assertTrue(metadata_path.is_file(), "Kaggle metadata is missing")
+        self.assertTrue(description_path.is_file(), "Kaggle description is missing")
+        metadata = json.loads(
+            metadata_path.read_text(encoding="utf-8")
+        )
+        description = description_path.read_text(encoding="utf-8")
+
+        self.assertEqual(metadata["id"], KAGGLE_DATASET_ID)
+        self.assertEqual(metadata["title"], TITLE)
+        self.assertIn("merchant statement", metadata["subtitle"].lower())
+        self.assertIn({"name": "CC-BY-4.0"}, metadata["licenses"])
+        for identity_url in (CANONICAL_URL, DOI_URL, CONCEPT_DOI_URL, RELEASE_URL):
+            self.assertIn(identity_url, description)
+        self.assertIn(VERSION, description)
+        self.assertIn("synthetic", description.lower())
+        self.assertIn("no real merchant", description.lower())
 
 
 if __name__ == "__main__":
