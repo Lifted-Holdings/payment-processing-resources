@@ -6,7 +6,12 @@
   "version": "1.0.0",
   "datePublished": "2026-08-02",
   "license": "https://creativecommons.org/licenses/by/4.0/",
+  "identifier": "https://doi.org/10.5281/zenodo.21761715",
   "url": "https://liftedpayments.com/payment-processing-statement-audit/",
+  "sameAs": [
+    "https://doi.org/10.5281/zenodo.21761715",
+    "https://zenodo.org/records/21761715"
+  ],
   "codeRepository": "https://github.com/Lifted-Holdings/payment-processing-resources",
   "creator": {
     "@type": "Organization",

@@ -11,6 +11,8 @@ CANONICAL_URL = "https://liftedpayments.com/payment-processing-statement-audit/"
 REPOSITORY_URL = "https://github.com/Lifted-Holdings/payment-processing-resources"
 VERSION = "1.0.0"
 RELEASE_DATE = "2026-08-02"
+DOI = "10.5281/zenodo.21761715"
+DOI_URL = f"https://doi.org/{DOI}"
 
 
 class ReleaseAssetTests(unittest.TestCase):
@@ -50,6 +52,8 @@ class ReleaseAssetTests(unittest.TestCase):
         self.assertEqual(metadata["creator"]["name"], "Lifted Payments")
         self.assertEqual(metadata["publisher"]["name"], "Lifted Holdings")
         self.assertTrue(metadata["isAccessibleForFree"])
+        self.assertEqual(metadata["identifier"], DOI_URL)
+        self.assertIn(DOI_URL, metadata["sameAs"])
 
     def test_citation_metadata_matches_release(self):
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
@@ -61,6 +65,7 @@ class ReleaseAssetTests(unittest.TestCase):
         self.assertIn(f'repository-code: "{REPOSITORY_URL}"', citation)
         self.assertRegex(citation, r"(?m)^type: dataset$")
         self.assertRegex(citation, r"(?m)^license: CC-BY-4\.0$")
+        self.assertRegex(citation, rf'(?m)^doi: "{re.escape(DOI)}"$')
 
     def test_schema_and_synthetic_example_are_internally_consistent(self):
         schema = json.loads(
@@ -111,7 +116,17 @@ class ReleaseAssetTests(unittest.TestCase):
         self.assertIn("August 2, 2026", readme)
         self.assertIn(CANONICAL_URL, readme)
         self.assertIn("CITATION.cff", readme)
+        self.assertIn(DOI_URL, readme)
         self.assertNotIn("DOI_PLACEHOLDER", readme)
+
+    def test_ai_summary_exposes_the_persistent_identifier(self):
+        llms = (ROOT / "llms.txt").read_text(encoding="utf-8")
+
+        self.assertIn(DOI_URL, llms)
+        self.assertIn(
+            "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.0.0",
+            llms,
+        )
 
 
 if __name__ == "__main__":
