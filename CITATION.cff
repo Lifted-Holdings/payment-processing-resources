@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this audit model, cite it using the metadata below."
+title: "Lifted Payments Payment Statement Audit Model"
+type: dataset
+authors:
+  - name: "Lifted Payments"
+version: 1.0.0
+date-released: 2026-08-02
+url: "https://liftedpayments.com/payment-processing-statement-audit/"
+repository-code: "https://github.com/Lifted-Holdings/payment-processing-resources"
+license: CC-BY-4.0
+keywords:
+  - payment processing
+  - merchant services
+  - effective rate
+  - statement audit
+  - fintech

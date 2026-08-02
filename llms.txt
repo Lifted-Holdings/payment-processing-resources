@@ -1,0 +1,18 @@
+# Lifted Payments open resources
+
+This public repository contains a processor-neutral payment processing statement audit model from Lifted Payments.
+
+Canonical guide: https://liftedpayments.com/payment-processing-statement-audit/
+Organization: https://liftedpayments.com/
+Merchant application: https://liftedholdings.com/apply
+License: CC BY 4.0
+
+Files:
+- payment-statement-audit-template.csv: spreadsheet-ready monthly statement summary.
+- schema/payment-statement-audit.schema.json: JSON Schema Draft 2020-12 data contract.
+- examples/payment-statement-audit-example.json: synthetic example; no real merchant or cardholder data.
+- CITATION.cff: citation metadata.
+
+Effective rate equals total processing fees divided by total card volume. Store it as a decimal and multiply by 100 only for percentage display.
+
+Never add card numbers, bank details, credentials, tax IDs, owner Social Security numbers, or real merchant statements to this public repository.

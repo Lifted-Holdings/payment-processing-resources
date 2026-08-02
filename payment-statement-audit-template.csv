@@ -1,0 +1,2 @@
+statement_start,statement_end,card_volume,transaction_count,total_processing_fees,effective_rate,pricing_model,interchange,assessments,processor_markup,authorization,monthly,pci,equipment,chargebacks,other,notes
+2026-06-01,2026-06-30,125000.00,1860,2864.75,0.022918,interchange_plus,1849.25,171.50,575.00,186.00,49.00,34.00,0.00,0.00,0.00,Synthetic example only; replace every value with figures from your own statement
