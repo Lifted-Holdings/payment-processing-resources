@@ -66,10 +66,14 @@ Install the pinned validator dependency and run the companion validator:
 python -m pip install -r requirements-validation.txt
 python tools/validate_audit.py examples/payment-statement-audit-example.json
 python tools/validate_audit.py --corpus
-python tools/publication_gate.py
+python tools/publication_gate.py --mode package
+python tools/publication_gate.py --mode candidate
+python tools/publication_gate.py --mode published
 ```
 
-The first command validates one record without echoing submitted values in an error. The corpus command must accept 2 valid synthetic vectors and reject 14 invalid vectors for their expected rules. The publication gate is fail-closed: it also requires aligned package/schema/DOI metadata, a complete manifest-to-tree inventory, bounded text assets, the candidate validator's behavioral regression suite, SHA-256 coverage, path containment, LF portability, full-release credential screening, immutable-tag protection, and a fresh validation report.
+The first command validates one record without echoing submitted values in an error. The corpus command must accept 2 valid synthetic vectors and reject 14 invalid vectors for their expected rules. Package mode verifies internal archive consistency but never claims publication readiness. Candidate mode additionally requires a clean committed checkout, the authoritative origin, complete remote tag state, and a new monotonic version or an exact existing tag. Published mode adds bounded verification of the public GitHub, Zenodo, DOI, and distribution artifacts. Missing Git metadata or unavailable remote evidence fails closed instead of treating an existing version as new.
+
+Candidate code does not execute until inventory, path, size, UTF-8, LF, checksum, credential-signature, identity, committed-tree, origin, and tag-state checks pass. See [`SECURITY.md`](./SECURITY.md) for the assurance boundary and non-goals.
 
 JSON Schema enforces record shape; the companion validator additionally asserts calendar dates, arithmetic equality, Decimal precision, unique fee categories, zero-activity behavior, and privacy patterns. The required top-level fields are:
 

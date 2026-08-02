@@ -17,7 +17,14 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_VERSION = "1.2.0"
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from release_provenance import inspect_repository  # noqa: E402
+
+
+GATE_VERSION = "2.0.0"
 VERSION_DOI_PATTERN = re.compile(r"^10\.5281/zenodo\.\d+$")
 SEMVER_PATTERN = re.compile(r"^[1-9]\d*\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
 RELEASE_TITLE = "Lifted Payments Payment Statement Audit Model"
@@ -70,7 +77,9 @@ REQUIRED_RELEASE_ASSETS = {
     "tests/test_audit_validator.py",
     "tests/test_publication_gate.py",
     "tests/test_release_assets.py",
+    "tests/test_release_provenance.py",
     "tools/publication_gate.py",
+    "tools/release_provenance.py",
     "tools/update_checksums.py",
     "tools/validate_audit.py",
     "validation-report.json",
@@ -427,7 +436,11 @@ def _identity_matches(root: Path, manifest: dict[str, Any]) -> bool:
     return True
 
 
-def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
+def build_publication_report(
+    root: Path | str = ROOT, *, mode: str = "candidate"
+) -> dict[str, Any]:
+    if mode not in {"package", "candidate", "published"}:
+        raise ValueError("unsupported publication mode")
     root = Path(root).resolve()
     try:
         manifest = _load_manifest(root)
@@ -441,6 +454,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
         return {
             "gate_version": GATE_VERSION,
+            "mode": mode,
             "release_version": None,
             "status": "blocked",
             "check_count": 1,
@@ -502,18 +516,6 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
 
     checks.append(
         _check(
-            "immutable_tag_match",
-            names_are_valid
-            and safe_paths
-            and release_sizes_are_safe
-            and _matches_existing_release_tag(root, manifest, names),
-            "The candidate is a new version or exactly matches its existing immutable release tag.",
-            "Declared files differ from an existing release tag or tag identity could not be verified.",
-        )
-    )
-
-    checks.append(
-        _check(
             "required_release_assets",
             names_are_valid and REQUIRED_RELEASE_ASSETS.issubset(set(names)),
             "Every security-critical schema, validator, test, metadata, and integrity asset is declared.",
@@ -531,63 +533,6 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
             and version_doi != concept_doi,
             "A syntactically valid, distinct Zenodo version DOI is declared.",
             "A syntactically valid, distinct Zenodo version DOI is not declared.",
-        )
-    )
-
-    try:
-        corpus_report = (
-            _run_candidate_corpus(root) if release_sizes_are_safe else {"status": "fail"}
-        )
-        corpus_ready = release_sizes_are_safe and (
-            corpus_report.get("status") == "pass"
-            and corpus_report.get("validator_version") == manifest.get("version")
-        )
-    except (
-        OSError,
-        UnicodeError,
-        ValueError,
-        RuntimeError,
-        json.JSONDecodeError,
-        subprocess.TimeoutExpired,
-    ):
-        corpus_report = {"status": "fail"}
-        corpus_ready = False
-    checks.append(
-        _check(
-            "corpus_validation",
-            corpus_ready,
-            "All valid and invalid synthetic vectors produce expected results.",
-            "The synthetic validation corpus does not reproduce expected results.",
-        )
-    )
-
-    try:
-        candidate_regressions_ready = release_sizes_are_safe and (
-            _run_candidate_regression_suite(root)
-        )
-    except (OSError, UnicodeError, subprocess.TimeoutExpired):
-        candidate_regressions_ready = False
-    checks.append(
-        _check(
-            "candidate_regression_suite",
-            candidate_regressions_ready,
-            "The candidate validator passes its bounded behavioral regression suite.",
-            "The candidate validator regression suite failed, timed out, or could not run.",
-        )
-    )
-
-    dependency_lock = (
-        _pinned_dependencies(root / "requirements-validation.txt")
-        if release_sizes_are_safe
-        else {}
-    )
-    checks.append(
-        _check(
-            "dependency_lock",
-            corpus_ready
-            and dependency_lock == corpus_report.get("dependency_versions"),
-            "Validation runtime and all transitive dependencies are exactly pinned.",
-            "Validation dependency pins are incomplete or differ from the tested runtime.",
         )
     )
 
@@ -688,6 +633,88 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
+    static_ready = all(check.status == "pass" for check in checks)
+    provenance_ready = mode == "package"
+    if mode != "package":
+        provenance = None
+        if static_ready and names_are_valid:
+            try:
+                provenance = inspect_repository(
+                    root,
+                    str(manifest.get("version", "")),
+                    files=names,
+                    expected_origin=SOURCE_REPOSITORY,
+                )
+            except (OSError, TypeError, ValueError, subprocess.TimeoutExpired):
+                provenance = None
+        provenance_ready = bool(provenance and provenance.publication_ready)
+        checks.append(
+            _check(
+                "repository_provenance",
+                provenance_ready,
+                "The candidate is a clean committed tree with authoritative remote tag provenance.",
+                "Git metadata, committed-tree, origin, remote-tag, or version provenance is not publication-ready.",
+            )
+        )
+
+    execution_ready = static_ready and provenance_ready
+    try:
+        corpus_report = (
+            _run_candidate_corpus(root) if execution_ready else {"status": "fail"}
+        )
+        corpus_ready = execution_ready and (
+            corpus_report.get("status") == "pass"
+            and corpus_report.get("validator_version") == manifest.get("version")
+        )
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        RuntimeError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+    ):
+        corpus_report = {"status": "fail"}
+        corpus_ready = False
+    checks.append(
+        _check(
+            "corpus_validation",
+            corpus_ready,
+            "All valid and invalid synthetic vectors produce expected results.",
+            "The synthetic validation corpus did not run safely or reproduce expected results.",
+        )
+    )
+
+    try:
+        candidate_regressions_ready = execution_ready and (
+            _run_candidate_regression_suite(root)
+        )
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
+        candidate_regressions_ready = False
+    checks.append(
+        _check(
+            "candidate_regression_suite",
+            candidate_regressions_ready,
+            "The candidate validator passes its bounded behavioral regression suite.",
+            "The candidate validator regression suite did not run safely, failed, or timed out.",
+        )
+    )
+
+    dependency_lock = (
+        _pinned_dependencies(root / "requirements-validation.txt")
+        if execution_ready
+        else {}
+    )
+    checks.append(
+        _check(
+            "dependency_lock",
+            corpus_ready
+            and dependency_lock == corpus_report.get("dependency_versions"),
+            "Validation runtime and all transitive dependencies are exactly pinned.",
+            "Validation dependency pins are incomplete or differ from the tested runtime.",
+        )
+    )
+
     validation_report_path = root / "validation-report.json"
     validation_report_matches = False
     if release_sizes_are_safe and validation_report_path.is_file() and corpus_ready:
@@ -707,12 +734,31 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
+    if mode == "published":
+        checks.append(
+            _check(
+                "public_release_attestation",
+                False,
+                "Public GitHub, Zenodo, DOI, and mirror artifacts match the tagged release.",
+                "Public release attestation is unavailable or did not match the tagged release.",
+            )
+        )
+
     serialized = [check.to_dict() for check in checks]
     failed = sum(check["status"] == "fail" for check in serialized)
+    if failed:
+        status = "blocked"
+    elif mode == "package":
+        status = "valid"
+    elif mode == "candidate":
+        status = "ready"
+    else:
+        status = "verified"
     return {
         "gate_version": GATE_VERSION,
+        "mode": mode,
         "release_version": manifest.get("version"),
-        "status": "ready" if failed == 0 else "blocked",
+        "status": status,
         "check_count": len(serialized),
         "failed_check_count": failed,
         "checks": serialized,
@@ -725,19 +771,27 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Verify that the statement-audit package is safe to publish."
     )
     parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument(
+        "--mode",
+        choices=("package", "candidate", "published"),
+        default="candidate",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    report = build_publication_report(ROOT)
+    report = build_publication_report(ROOT, mode=args.mode)
     if args.as_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
-        print(f"PUBLICATION {report['status'].upper()}: {report['failed_check_count']} failed check(s)")
+        print(
+            f"{report['mode'].upper()} {report['status'].upper()}: "
+            f"{report['failed_check_count']} failed check(s)"
+        )
         for check in report["checks"]:
             print(f"- {check['status'].upper()} {check['code']}: {check['message']}")
-    return 0 if report["status"] == "ready" else 1
+    return 0 if report["status"] != "blocked" else 1
 
 
 if __name__ == "__main__":
