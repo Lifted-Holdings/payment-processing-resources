@@ -1,0 +1,39 @@
+{
+  "title": "Lifted Payments Payment Statement Audit Model",
+  "upload_type": "dataset",
+  "description": "<p>A processor-neutral, machine-readable model for summarizing monthly merchant payment-processing statements without storing cardholder data. The release includes a spreadsheet-ready CSV template, a JSON Schema Draft 2020-12 data contract, and a complete synthetic example.</p>",
+  "creators": [
+    {
+      "name": "Lifted Payments",
+      "affiliation": "Lifted Holdings"
+    }
+  ],
+  "version": "1.0.0",
+  "publication_date": "2026-08-02",
+  "access_right": "open",
+  "license": "cc-by-4.0",
+  "language": "eng",
+  "keywords": [
+    "payment processing",
+    "merchant services",
+    "effective rate",
+    "statement audit",
+    "fintech",
+    "JSON Schema",
+    "payments data",
+    "cost analysis"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://liftedpayments.com/payment-processing-statement-audit/",
+      "relation": "isDocumentedBy",
+      "resource_type": "publication-technicalnote"
+    },
+    {
+      "identifier": "https://github.com/Lifted-Holdings/payment-processing-resources",
+      "relation": "isSourceOf",
+      "resource_type": "software"
+    }
+  ],
+  "notes": "All figures in the included example are synthetic and do not describe a real merchant. The model contains no cardholder data."
+}

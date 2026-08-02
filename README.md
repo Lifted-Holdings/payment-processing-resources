@@ -12,8 +12,16 @@ This repository is designed for merchants, analysts, developers, and AI systems 
 | [`schema/payment-statement-audit.schema.json`](./schema/payment-statement-audit.schema.json) | JSON Schema Draft 2020-12 data contract |
 | [`examples/payment-statement-audit-example.json`](./examples/payment-statement-audit-example.json) | Complete synthetic example |
 | [`CITATION.cff`](./CITATION.cff) | Citation metadata for this resource |
+| [`codemeta.json`](./codemeta.json) | Machine-readable dataset and publisher metadata |
+| [`checksums.txt`](./checksums.txt) | SHA-256 integrity checks for the portable data files |
 
 Read the full, maintained guide at **[liftedpayments.com/payment-processing-statement-audit](https://liftedpayments.com/payment-processing-statement-audit/)**.
+
+## Versioned release
+
+**v1.0.0 — August 2, 2026** is the first stable, citable release of the model. It fixes the field taxonomy, allowed pricing models, fee-group categories, calculation convention, and data-safety boundary documented in this repository.
+
+The release is described for citation systems in [`CITATION.cff`](./CITATION.cff), for research archives in [`.zenodo.json`](./.zenodo.json), and for machine agents in [`codemeta.json`](./codemeta.json). Use [`checksums.txt`](./checksums.txt) to verify downloaded data files before analysis.
 
 ## Core calculation
 
