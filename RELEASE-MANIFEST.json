@@ -49,7 +49,9 @@
     "tests/test_audit_validator.py",
     "tests/test_publication_gate.py",
     "tests/test_release_assets.py",
+    "tests/test_release_provenance.py",
     "tools/publication_gate.py",
+    "tools/release_provenance.py",
     "tools/update_checksums.py",
     "tools/validate_audit.py",
     "validation-report.json"
