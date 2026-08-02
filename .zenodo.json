@@ -1,14 +1,14 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
   "upload_type": "dataset",
-  "description": "<p>A processor-neutral, machine-readable model for summarizing monthly merchant payment-processing statements without storing cardholder data. The release includes a spreadsheet-ready CSV template, a JSON Schema Draft 2020-12 data contract, and a complete synthetic example.</p>",
+  "description": "<p>A processor-neutral, machine-readable model for normalizing monthly merchant payment-processing statements without storing cardholder data. Version 1.1.0 adds a companion semantic validator, exact fee and rate reconciliation, explicit calculation definitions, privacy screening, adversarial test vectors, and a reproducible validation report.</p>",
   "creators": [
     {
       "name": "Lifted Payments",
       "affiliation": "Lifted Holdings"
     }
   ],
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publication_date": "2026-08-02",
   "access_right": "open",
   "license": "cc-by-4.0",
@@ -30,10 +30,10 @@
       "resource_type": "publication-technicalnote"
     },
     {
-      "identifier": "https://github.com/Lifted-Holdings/payment-processing-resources",
+      "identifier": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.0",
       "relation": "isSourceOf",
       "resource_type": "software"
     }
   ],
-  "notes": "All figures in the included example are synthetic and do not describe a real merchant. The model contains no cardholder data."
+  "notes": "All figures and validation vectors are synthetic and do not describe a real merchant. The model contains no cardholder data. The validation report records 2 accepted valid vectors and 13 correctly rejected invalid vectors."
 }

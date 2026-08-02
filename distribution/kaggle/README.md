@@ -1,13 +1,13 @@
 # Lifted Payments Payment Statement Audit Model
 
-This is the Kaggle distribution of version **1.0.0** of the Lifted Payments Payment Statement Audit Model: a processor-neutral CSV template, JSON Schema, and synthetic example for summarizing monthly merchant payment-processing costs.
+This is the Kaggle distribution of version **1.1.0** of the Lifted Payments Payment Statement Audit Model: a processor-neutral CSV template, JSON Schema, companion validator, methodology, adversarial test corpus, and synthetic examples for normalizing monthly merchant payment-processing costs.
 
 ## Authoritative references
 
 - Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/
-- Version DOI: https://doi.org/10.5281/zenodo.21761715
+- Version DOI: https://doi.org/10.5281/zenodo.21762273
 - Concept DOI: https://doi.org/10.5281/zenodo.21761714
-- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.0.0
+- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.0
 - Source repository: https://github.com/Lifted-Holdings/payment-processing-resources
 
 ## What the files do
@@ -15,9 +15,11 @@ This is the Kaggle distribution of version **1.0.0** of the Lifted Payments Paym
 - `payment-statement-audit-template.csv` supplies a spreadsheet-ready field header.
 - `payment-statement-audit.schema.json` validates structured audit records.
 - `payment-statement-audit-example.json` demonstrates a complete record using synthetic values.
+- `DATA_DICTIONARY.md` and `METHODOLOGY.md` define every calculation, inclusion, exclusion, rounding rule, and limitation.
+- `validate_audit.py`, the synthetic test vectors, and `validation-report.json` make acceptance and rejection behavior reproducible.
 - `CITATION.cff`, `codemeta.json`, and `checksums.txt` preserve citation, entity identity, and file integrity.
 
-The effective rate is calculated as total processing fees divided by total card volume. The JSON value is stored as a decimal and multiplied by 100 only for percentage display.
+Fee groups reconcile exactly to gross processing fees; processing-fee credits are separate. The effective rate is calculated as net processing fees divided by gross settled purchase volume. The JSON value is stored as a decimal and multiplied by 100 only for percentage display.
 
 ## Safety and limits
 
@@ -27,6 +29,6 @@ The model supports consistent analysis; it does not determine legal compliance, 
 
 ## Citation and license
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.0.0). Zenodo. https://doi.org/10.5281/zenodo.21761715
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.0). Zenodo. https://doi.org/10.5281/zenodo.21762273
 
 Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
