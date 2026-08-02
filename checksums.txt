@@ -1,0 +1,3 @@
+c9436b88fb269176ddc384bd0f2cb6c8fd208977bed82ec2ad9ac436fcb44d11  payment-statement-audit-template.csv
+3ff931588c887c8a2e51ca3c5bd4f025de8da18c40b362365c3620fb29604098  schema/payment-statement-audit.schema.json
+dc6879617403f578922d59011bf8fe75f84e33fe8248e43bf1d387239623bd1c  examples/payment-statement-audit-example.json
