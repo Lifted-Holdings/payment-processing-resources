@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import re
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,20 +20,59 @@ CHECKSUMS_PATH = ROOT / "checksums.txt"
 VERSION_DOI_PATTERN = re.compile(r"^10\.5281/zenodo\.\d+$")
 SECRET_PATTERN = re.compile(
     r"(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
-    r"\b(?:sk|ghp|github_pat|hf)_[A-Za-z0-9_-]{12,}\b)",
+    r"\bAKIA[0-9A-Z]{16}\b|"
+    r"\bAIza[0-9A-Za-z_-]{35}\b|"
+    r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b|"
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b|"
+    r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}\b|"
+    r"\bsk-ant-[A-Za-z0-9_-]{20,}\b|"
+    r"\bya29\.[A-Za-z0-9_-]{20,}\b|"
+    r"\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b|"
+    r"\b(?:sk|hf)_[A-Za-z0-9_-]{20,}\b)",
     re.I,
 )
+REQUIRED_RELEASE_ASSETS = {
+    ".gitattributes",
+    ".zenodo.json",
+    "CHANGELOG.md",
+    "CITATION.cff",
+    "checksums.txt",
+    "codemeta.json",
+    "DATA_DICTIONARY.md",
+    "examples/payment-statement-audit-example.json",
+    "LICENSE.md",
+    "METHODOLOGY.md",
+    "README.md",
+    "RELEASE-MANIFEST.json",
+    "requirements-validation.txt",
+    "schema/payment-statement-audit.schema.json",
+    "SECURITY.md",
+    "test-vectors/manifest.json",
+    "tests/test_audit_validator.py",
+    "tests/test_publication_gate.py",
+    "tests/test_release_assets.py",
+    "tools/publication_gate.py",
+    "tools/update_checksums.py",
+    "tools/validate_audit.py",
+    "validation-report.json",
+}
 
 
-def _load_validator_module():
-    path = ROOT / "tools/validate_audit.py"
-    spec = importlib.util.spec_from_file_location("release_audit_validator", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("validator_import_failed")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+def _run_candidate_corpus(root: Path) -> dict[str, Any]:
+    result = subprocess.run(
+        [sys.executable, str(root / "tools/validate_audit.py"), "--corpus"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=20,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("candidate_validator_failed")
+    report = json.loads(result.stdout)
+    if not isinstance(report, dict):
+        raise ValueError("candidate_validator_report")
+    return report
 
 
 @dataclass(frozen=True)
@@ -55,30 +94,64 @@ def _sha256(path: Path) -> str:
 
 
 def _load_manifest(root: Path) -> dict[str, Any]:
-    return json.loads((root / "RELEASE-MANIFEST.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (root / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
+    )
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest_root")
+    return manifest
 
 
 def _safe_file_paths(root: Path, names: list[str]) -> tuple[list[Path], bool]:
     root_resolved = root.resolve()
     paths: list[Path] = []
+    seen_paths: set[Path] = set()
     safe = True
     for name in names:
-        candidate = (root / name).resolve()
+        if not isinstance(name, str) or not name:
+            safe = False
+            continue
+        relative_path = Path(name)
+        if (
+            relative_path.is_absolute()
+            or ".." in relative_path.parts
+            or relative_path.as_posix() != name
+        ):
+            safe = False
+            continue
+        logical_path = root
+        symlinked_component = False
+        for part in relative_path.parts:
+            logical_path /= part
+            if logical_path.is_symlink():
+                symlinked_component = True
+                break
+        if symlinked_component:
+            safe = False
+            continue
+        candidate = logical_path.resolve()
         try:
             candidate.relative_to(root_resolved)
         except ValueError:
             safe = False
-        if Path(name).is_absolute() or ".." in Path(name).parts:
+            continue
+        if candidate in seen_paths:
             safe = False
+            continue
+        seen_paths.add(candidate)
         paths.append(candidate)
-    return paths, safe
+    return paths, safe and len(paths) == len(names)
 
 
 def _parse_checksums(path: Path) -> dict[str, str]:
     checksums: dict[str, str] = {}
     if not path.is_file():
         return checksums
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return checksums
+    for line in lines:
         if not line.strip():
             continue
         parts = line.strip().split(maxsplit=1)
@@ -108,12 +181,33 @@ def _pinned_dependencies(path: Path) -> dict[str, str]:
 
 
 def _identity_matches(root: Path, manifest: dict[str, Any]) -> bool:
+    title = manifest.get("title")
     version = manifest.get("version")
+    schema_version = manifest.get("schema_version")
+    release_date = manifest.get("release_date")
     doi = manifest.get("version_doi")
-    if not isinstance(version, str) or not isinstance(doi, str):
+    concept_doi = manifest.get("concept_doi")
+    canonical_url = manifest.get("canonical_url")
+    license_id = manifest.get("license")
+    identity_values = (
+        title,
+        version,
+        schema_version,
+        release_date,
+        doi,
+        concept_doi,
+        canonical_url,
+        license_id,
+    )
+    if not all(isinstance(value, str) for value in identity_values):
         return False
     doi_url = f"https://doi.org/{doi}"
+    concept_doi_url = f"https://doi.org/{concept_doi}"
+    zenodo_record_url = f"https://zenodo.org/records/{doi.rsplit('.', maxsplit=1)[-1]}"
     release_url = manifest.get("source_release")
+
+    if not isinstance(release_url, str):
+        return False
 
     try:
         zenodo = json.loads((root / ".zenodo.json").read_text(encoding="utf-8"))
@@ -132,15 +226,42 @@ def _identity_matches(root: Path, manifest: dict[str, Any]) -> bool:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
 
+    if not all(
+        isinstance(document, dict)
+        for document in (zenodo, codemeta, schema, example)
+    ):
+        return False
+
+    related = {
+        (item.get("identifier"), item.get("relation"))
+        for item in zenodo.get("related_identifiers", [])
+        if isinstance(item, dict)
+    }
+    codemeta_same_as = set(codemeta.get("sameAs", []))
     if not (
-        zenodo.get("version") == version
+        zenodo.get("title") == title
+        and zenodo.get("version") == version
+        and zenodo.get("publication_date") == release_date
+        and str(zenodo.get("license", "")).lower() == license_id.lower()
+        and (canonical_url, "isDocumentedBy") in related
+        and (release_url, "isSourceOf") in related
+        and codemeta.get("name") == title
         and codemeta.get("version") == version
+        and codemeta.get("datePublished") == release_date
         and codemeta.get("identifier") == doi_url
-        and example.get("schema_version") == version
+        and codemeta.get("url") == canonical_url
+        and doi_url in codemeta_same_as
+        and concept_doi_url in codemeta_same_as
+        and zenodo_record_url in codemeta_same_as
+        and example.get("schema_version") == schema_version
         and schema.get("properties", {}).get("schema_version", {}).get("const")
-        == version
+        == schema_version
+        and re.search(rf'(?m)^title: "{re.escape(title)}"$', citation)
         and re.search(rf"(?m)^version: {re.escape(version)}$", citation)
+        and re.search(rf"(?m)^date-released: {re.escape(release_date)}$", citation)
         and re.search(rf'(?m)^doi: "{re.escape(doi)}"$', citation)
+        and re.search(rf'(?m)^url: "{re.escape(canonical_url)}"$', citation)
+        and re.search(rf"(?m)^license: {re.escape(license_id)}$", citation)
     ):
         return False
 
@@ -158,17 +279,40 @@ def _identity_matches(root: Path, manifest: dict[str, Any]) -> bool:
 
 
 def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
-    root = Path(root)
-    manifest = _load_manifest(root)
-    names = manifest.get("files", [])
-    paths, safe_paths = _safe_file_paths(root, names if isinstance(names, list) else [])
+    root = Path(root).resolve()
+    try:
+        manifest = _load_manifest(root)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        manifest_path = root / "RELEASE-MANIFEST.json"
+        digest = _sha256(manifest_path) if manifest_path.is_file() else None
+        check = GateCheck(
+            "manifest_read",
+            "fail",
+            "Release manifest is missing, unreadable, malformed, or not a JSON object.",
+        )
+        return {
+            "gate_version": "1.1.0",
+            "release_version": None,
+            "status": "blocked",
+            "check_count": 1,
+            "failed_check_count": 1,
+            "checks": [check.to_dict()],
+            "manifest_sha256": digest,
+        }
+    raw_names = manifest.get("files", [])
+    names = raw_names if isinstance(raw_names, list) else []
+    names_are_valid = (
+        isinstance(raw_names, list)
+        and all(isinstance(name, str) and name for name in names)
+        and len(names) == len(set(names))
+    )
+    paths, safe_paths = _safe_file_paths(root, names)
     checks: list[GateCheck] = []
 
     checks.append(
         _check(
             "manifest_inventory",
-            isinstance(names, list)
-            and len(names) == len(set(names))
+            names_are_valid
             and len(names) >= 20
             and safe_paths
             and all(path.is_file() and not path.is_symlink() for path in paths),
@@ -177,23 +321,42 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
-    version_doi = manifest.get("version_doi")
     checks.append(
         _check(
-            "version_doi_reserved",
+            "required_release_assets",
+            names_are_valid and REQUIRED_RELEASE_ASSETS.issubset(set(names)),
+            "Every security-critical schema, validator, test, metadata, and integrity asset is declared.",
+            "One or more security-critical release assets is absent from the manifest.",
+        )
+    )
+
+    version_doi = manifest.get("version_doi")
+    concept_doi = manifest.get("concept_doi")
+    checks.append(
+        _check(
+            "version_doi_declared",
             isinstance(version_doi, str)
             and bool(VERSION_DOI_PATTERN.fullmatch(version_doi))
-            and version_doi != "10.5281/zenodo.21761715",
-            "A distinct Zenodo v1.1.0 DOI is reserved.",
-            "A distinct Zenodo v1.1.0 DOI has not been reserved.",
+            and version_doi != concept_doi,
+            "A syntactically valid, distinct Zenodo version DOI is declared.",
+            "A syntactically valid, distinct Zenodo version DOI is not declared.",
         )
     )
 
     try:
-        audit_validator = _load_validator_module()
-        corpus_report = audit_validator.build_corpus_report(root)
-        corpus_ready = corpus_report.get("status") == "pass"
-    except (OSError, UnicodeError, ValueError, RuntimeError, json.JSONDecodeError):
+        corpus_report = _run_candidate_corpus(root)
+        corpus_ready = (
+            corpus_report.get("status") == "pass"
+            and corpus_report.get("validator_version") == manifest.get("version")
+        )
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        RuntimeError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+    ):
         corpus_report = {"status": "fail"}
         corpus_ready = False
     checks.append(
@@ -216,23 +379,37 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
+    try:
+        identity_matches = _identity_matches(root, manifest)
+    except (
+        AttributeError,
+        OSError,
+        UnicodeError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        identity_matches = False
     checks.append(
         _check(
             "release_identity",
-            _identity_matches(root, manifest),
+            identity_matches,
             "Version, DOI, schema, citation, and source-release identities agree.",
             "Version, DOI, schema, citation, or source-release identities disagree.",
         )
     )
 
     checksums = _parse_checksums(root / "checksums.txt")
-    expected_checksum_files = set(names) - {"checksums.txt"}
-    checksum_valid = set(checksums) == expected_checksum_files
+    expected_checksum_files = set(names) - {"checksums.txt"} if names_are_valid else set()
+    checksum_valid = safe_paths and set(checksums) == expected_checksum_files
     if checksum_valid:
-        checksum_valid = all(
-            (root / name).is_file() and _sha256(root / name) == digest
-            for name, digest in checksums.items()
-        )
+        try:
+            checksum_valid = all(
+                (root / name).is_file() and _sha256(root / name) == digest
+                for name, digest in checksums.items()
+            )
+        except OSError:
+            checksum_valid = False
     checks.append(
         _check(
             "release_checksums",
@@ -242,7 +419,12 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
-    lf_only = all(b"\r\n" not in path.read_bytes() for path in paths if path.is_file())
+    try:
+        lf_only = safe_paths and all(
+            b"\r\n" not in path.read_bytes() for path in paths if path.is_file()
+        )
+    except OSError:
+        lf_only = False
     checks.append(
         _check(
             "lf_portability",
@@ -252,7 +434,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
-    utf8_assets = True
+    utf8_assets = safe_paths
     for path in paths:
         try:
             path.read_text(encoding="utf-8", errors="strict")
@@ -267,26 +449,9 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
-    public_text_names = (
-        ".zenodo.json",
-        "CITATION.cff",
-        "codemeta.json",
-        "DATA_DICTIONARY.md",
-        "distribution/huggingface/README.md",
-        "distribution/kaggle/README.md",
-        "distribution/kaggle/dataset-metadata.json",
-        "examples/payment-statement-audit-example.json",
-        "llms.txt",
-        "METHODOLOGY.md",
-        "payment-statement-audit-template.csv",
-        "README.md",
-        "schema/payment-statement-audit.schema.json",
-    )
     try:
-        public_text = "\n".join(
-            (root / name).read_text(encoding="utf-8") for name in public_text_names
-        )
-        safe_public_text = not SECRET_PATTERN.search(public_text)
+        public_text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+        safe_public_text = safe_paths and not SECRET_PATTERN.search(public_text)
     except (UnicodeError, OSError):
         safe_public_text = False
     checks.append(
@@ -320,7 +485,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
     serialized = [check.to_dict() for check in checks]
     failed = sum(check["status"] == "fail" for check in serialized)
     return {
-        "gate_version": "1.0.0",
+        "gate_version": "1.1.0",
         "release_version": manifest.get("version"),
         "status": "ready" if failed == 0 else "blocked",
         "check_count": len(serialized),

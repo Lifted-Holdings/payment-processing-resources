@@ -10,14 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 TITLE = "Lifted Payments Payment Statement Audit Model"
 CANONICAL_URL = "https://liftedpayments.com/payment-processing-statement-audit/"
 REPOSITORY_URL = "https://github.com/Lifted-Holdings/payment-processing-resources"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
+SCHEMA_VERSION = "1.1.0"
 RELEASE_DATE = "2026-08-02"
-DOI = "10.5281/zenodo.21762273"
+DOI = "10.5281/zenodo.21762767"
 DOI_URL = f"https://doi.org/{DOI}"
 CONCEPT_DOI_URL = "https://doi.org/10.5281/zenodo.21761714"
 RELEASE_URL = (
     "https://github.com/Lifted-Holdings/payment-processing-resources/"
-    "releases/tag/v1.1.0"
+    "releases/tag/v1.1.1"
 )
 HUGGING_FACE_REPO_ID = "Liftedholdings/payment-statement-audit-model"
 KAGGLE_DATASET_ID = "liftedpayments/payment-statement-audit-model"
@@ -39,6 +40,11 @@ class ReleaseAssetTests(unittest.TestCase):
             metadata["creators"],
         )
         self.assertGreaterEqual(len(metadata["keywords"]), 6)
+
+        manifest = json.loads(
+            (ROOT / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(RELEASE_DATE, manifest["release_date"])
 
         related = {
             (item["identifier"], item["relation"])
@@ -98,6 +104,7 @@ class ReleaseAssetTests(unittest.TestCase):
         self.assertTrue(
             any("synthetic" in note.lower() for note in example["review_notes"])
         )
+        self.assertEqual(SCHEMA_VERSION, example["schema_version"])
 
     def test_checksums_cover_every_declared_release_file(self):
         manifest = json.loads(
@@ -114,6 +121,29 @@ class ReleaseAssetTests(unittest.TestCase):
         for filename, expected_digest in checksums.items():
             actual_digest = hashlib.sha256((ROOT / filename).read_bytes()).hexdigest()
             self.assertEqual(expected_digest, actual_digest)
+
+    def test_release_manifest_covers_every_repository_asset(self):
+        manifest = json.loads(
+            (ROOT / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
+        )
+        result = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        repository_files = {
+            line.replace("\\", "/") for line in result.stdout.splitlines() if line
+        }
+        self.assertEqual(repository_files, set(manifest["files"]))
 
     def test_release_files_are_pinned_to_lf_by_git(self):
         manifest = json.loads(
@@ -139,7 +169,7 @@ class ReleaseAssetTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("## Versioned release", readme)
-        self.assertIn("v1.1.0", readme)
+        self.assertIn("v1.1.1", readme)
         self.assertIn("August 2, 2026", readme)
         self.assertIn(CANONICAL_URL, readme)
         self.assertIn("CITATION.cff", readme)
@@ -151,7 +181,7 @@ class ReleaseAssetTests(unittest.TestCase):
 
         self.assertIn(DOI_URL, llms)
         self.assertIn(
-            "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.0",
+            "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.1",
             llms,
         )
 

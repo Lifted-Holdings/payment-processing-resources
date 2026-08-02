@@ -20,14 +20,14 @@ configs:
 
 A processor-neutral data contract for turning monthly merchant payment-processing totals into a consistent, comparable audit record. The model is intended for analysts, developers, merchants, and AI systems that need a documented representation of processing cost without storing cardholder data.
 
-This distribution contains version **1.1.0** of the schema, companion validator, spreadsheet template, methodology, adversarial test corpus, and entirely synthetic examples. It is a reusable specification and demonstration package, not a collection of real merchant statements.
+This distribution contains package version **1.1.1** and its schema **1.1.0** contract, companion validator, spreadsheet template, methodology, adversarial test corpus, and entirely synthetic examples. It is a reusable specification and demonstration package, not a collection of real merchant statements.
 
 ## Persistent identity
 
 - Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/
-- Version DOI: https://doi.org/10.5281/zenodo.21762273
+- Version DOI: https://doi.org/10.5281/zenodo.21762767
 - Concept DOI: https://doi.org/10.5281/zenodo.21761714
-- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.0
+- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.1
 - Source repository: https://github.com/Lifted-Holdings/payment-processing-resources
 
 ## Files
@@ -83,7 +83,7 @@ The included example is synthetic and describes no real merchant. Never add card
 
 ## Citation
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.0). Zenodo. https://doi.org/10.5281/zenodo.21762273
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.1). Zenodo. https://doi.org/10.5281/zenodo.21762767
 
 ## License
 
