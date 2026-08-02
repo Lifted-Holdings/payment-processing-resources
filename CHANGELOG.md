@@ -2,6 +2,16 @@
 
 All notable changes to the versioned dataset package are recorded here. Published release artifacts remain immutable.
 
+## 1.1.2 - 2026-08-02
+
+- Require the publication gate to compare the manifest with the complete candidate release tree.
+- Run the candidate validator's behavioral regression suite in addition to the compact synthetic corpus.
+- Bound release file count, individual asset size, and aggregate release size before content scanning.
+- Reject spreadsheet-formula prefixes in CSV cells without echoing submitted values.
+- Validate trusted title, semantic versions, release date, DOI pair, license, canonical URL, and source-release identity.
+- Block changed files from masquerading as an existing immutable Git tag.
+- Add regression coverage for identity, bank, credential, rounding-tie, and zero-fee edge cases.
+
 ## 1.1.1 - 2026-08-02
 
 Security and release-engineering patch; the record contract remains schema version 1.1.0.

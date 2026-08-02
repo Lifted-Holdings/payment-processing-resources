@@ -7,17 +7,36 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = ROOT / "RELEASE-MANIFEST.json"
-CHECKSUMS_PATH = ROOT / "checksums.txt"
+GATE_VERSION = "1.2.0"
 VERSION_DOI_PATTERN = re.compile(r"^10\.5281/zenodo\.\d+$")
+SEMVER_PATTERN = re.compile(r"^[1-9]\d*\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
+RELEASE_TITLE = "Lifted Payments Payment Statement Audit Model"
+CANONICAL_URL = "https://liftedpayments.com/payment-processing-statement-audit/"
+SOURCE_REPOSITORY = "https://github.com/Lifted-Holdings/payment-processing-resources"
+LICENSE_ID = "CC-BY-4.0"
+MAX_RELEASE_FILE_COUNT = 256
+MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_RELEASE_FILE_BYTES = 5 * 1024 * 1024
+MAX_RELEASE_TOTAL_BYTES = 25 * 1024 * 1024
+RUNTIME_ONLY_DIRECTORIES = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "venv",
+}
 SECRET_PATTERN = re.compile(
     r"(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
     r"\bAKIA[0-9A-Z]{16}\b|"
@@ -75,6 +94,18 @@ def _run_candidate_corpus(root: Path) -> dict[str, Any]:
     return report
 
 
+def _run_candidate_regression_suite(root: Path) -> bool:
+    result = subprocess.run(
+        [sys.executable, str(root / "tests/test_audit_validator.py"), "-q"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    return result.returncode == 0
+
+
 @dataclass(frozen=True)
 class GateCheck:
     code: str
@@ -94,12 +125,130 @@ def _sha256(path: Path) -> str:
 
 
 def _load_manifest(root: Path) -> dict[str, Any]:
-    manifest = json.loads(
-        (root / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
-    )
+    manifest_path = root / "RELEASE-MANIFEST.json"
+    if manifest_path.is_symlink() or manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+        raise ValueError("manifest_size")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("manifest_root")
     return manifest
+
+
+def _manifest_identity_is_trusted(manifest: dict[str, Any]) -> bool:
+    title = manifest.get("title")
+    version = manifest.get("version")
+    schema_version = manifest.get("schema_version")
+    release_date = manifest.get("release_date")
+    version_doi = manifest.get("version_doi")
+    concept_doi = manifest.get("concept_doi")
+    canonical_url = manifest.get("canonical_url")
+    source_release = manifest.get("source_release")
+    license_id = manifest.get("license")
+    values = (
+        title,
+        version,
+        schema_version,
+        release_date,
+        version_doi,
+        concept_doi,
+        canonical_url,
+        source_release,
+        license_id,
+    )
+    if not all(isinstance(value, str) and value for value in values):
+        return False
+    try:
+        parsed_date = date.fromisoformat(release_date)
+    except ValueError:
+        return False
+    return (
+        title == RELEASE_TITLE
+        and bool(SEMVER_PATTERN.fullmatch(version))
+        and bool(SEMVER_PATTERN.fullmatch(schema_version))
+        and parsed_date.isoformat() == release_date
+        and bool(VERSION_DOI_PATTERN.fullmatch(version_doi))
+        and bool(VERSION_DOI_PATTERN.fullmatch(concept_doi))
+        and version_doi != concept_doi
+        and canonical_url == CANONICAL_URL
+        and source_release == f"{SOURCE_REPOSITORY}/releases/tag/v{version}"
+        and license_id == LICENSE_ID
+    )
+
+
+def _discover_release_files(root: Path) -> set[str] | None:
+    git_executable = shutil.which("git")
+    try:
+        result = (
+            subprocess.run(
+                [
+                    git_executable,
+                    "-C",
+                    str(root),
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ],
+                capture_output=True,
+                timeout=10,
+            )
+            if git_executable
+            else None
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    if result is not None and result.returncode == 0:
+        try:
+            names = result.stdout.decode("utf-8", errors="strict").split("\0")
+        except UnicodeError:
+            return None
+        return {name.replace("\\", "/") for name in names if name}
+
+    try:
+        discovered: set[str] = set()
+        for path in root.rglob("*"):
+            relative = path.relative_to(root)
+            if any(part in RUNTIME_ONLY_DIRECTORIES for part in relative.parts):
+                continue
+            if path.is_file() or path.is_symlink():
+                discovered.add(relative.as_posix())
+        return discovered
+    except OSError:
+        return None
+
+
+def _matches_existing_release_tag(
+    root: Path, manifest: dict[str, Any], names: list[str]
+) -> bool:
+    version = manifest.get("version")
+    git_executable = shutil.which("git")
+    if not isinstance(version, str) or not git_executable:
+        return False
+    tag = f"refs/tags/v{version}"
+    try:
+        tag_check = subprocess.run(
+            [git_executable, "-C", str(root), "rev-parse", "--verify", tag],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if tag_check.returncode != 0:
+        # A new version has no tag until the candidate passes this prepublication gate.
+        return True
+    for name in names:
+        try:
+            tagged = subprocess.run(
+                [git_executable, "-C", str(root), "show", f"{tag}:{name}"],
+                capture_output=True,
+                timeout=10,
+            )
+            if tagged.returncode != 0 or tagged.stdout != (root / name).read_bytes():
+                return False
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return True
 
 
 def _safe_file_paths(root: Path, names: list[str]) -> tuple[list[Path], bool]:
@@ -291,7 +440,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
             "Release manifest is missing, unreadable, malformed, or not a JSON object.",
         )
         return {
-            "gate_version": "1.1.0",
+            "gate_version": GATE_VERSION,
             "release_version": None,
             "status": "blocked",
             "check_count": 1,
@@ -307,6 +456,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         and len(names) == len(set(names))
     )
     paths, safe_paths = _safe_file_paths(root, names)
+    discovered_files = _discover_release_files(root)
     checks: list[GateCheck] = []
 
     checks.append(
@@ -315,9 +465,50 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
             names_are_valid
             and len(names) >= 20
             and safe_paths
+            and discovered_files == set(names)
             and all(path.is_file() and not path.is_symlink() for path in paths),
             "Release inventory is explicit, unique, contained, and complete.",
             "Release inventory is missing, duplicated, unsafe, or incomplete.",
+        )
+    )
+
+    checks.append(
+        _check(
+            "manifest_identity",
+            _manifest_identity_is_trusted(manifest),
+            "Release name, versions, date, DOI pair, license, and canonical source identity are trusted.",
+            "Release identity is missing, malformed, inconsistent, or points outside trusted publication surfaces.",
+        )
+    )
+
+    release_sizes_are_safe = safe_paths and len(paths) <= MAX_RELEASE_FILE_COUNT
+    if release_sizes_are_safe:
+        try:
+            sizes = [path.stat().st_size for path in paths]
+            release_sizes_are_safe = (
+                all(size <= MAX_RELEASE_FILE_BYTES for size in sizes)
+                and sum(sizes) <= MAX_RELEASE_TOTAL_BYTES
+            )
+        except OSError:
+            release_sizes_are_safe = False
+    checks.append(
+        _check(
+            "release_size_limits",
+            release_sizes_are_safe,
+            "Release file count and per-file and aggregate byte sizes are bounded.",
+            "Release file count or byte size exceeds the publication safety limits.",
+        )
+    )
+
+    checks.append(
+        _check(
+            "immutable_tag_match",
+            names_are_valid
+            and safe_paths
+            and release_sizes_are_safe
+            and _matches_existing_release_tag(root, manifest, names),
+            "The candidate is a new version or exactly matches its existing immutable release tag.",
+            "Declared files differ from an existing release tag or tag identity could not be verified.",
         )
     )
 
@@ -344,8 +535,10 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
     )
 
     try:
-        corpus_report = _run_candidate_corpus(root)
-        corpus_ready = (
+        corpus_report = (
+            _run_candidate_corpus(root) if release_sizes_are_safe else {"status": "fail"}
+        )
+        corpus_ready = release_sizes_are_safe and (
             corpus_report.get("status") == "pass"
             and corpus_report.get("validator_version") == manifest.get("version")
         )
@@ -368,7 +561,26 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
-    dependency_lock = _pinned_dependencies(root / "requirements-validation.txt")
+    try:
+        candidate_regressions_ready = release_sizes_are_safe and (
+            _run_candidate_regression_suite(root)
+        )
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
+        candidate_regressions_ready = False
+    checks.append(
+        _check(
+            "candidate_regression_suite",
+            candidate_regressions_ready,
+            "The candidate validator passes its bounded behavioral regression suite.",
+            "The candidate validator regression suite failed, timed out, or could not run.",
+        )
+    )
+
+    dependency_lock = (
+        _pinned_dependencies(root / "requirements-validation.txt")
+        if release_sizes_are_safe
+        else {}
+    )
     checks.append(
         _check(
             "dependency_lock",
@@ -380,7 +592,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
     )
 
     try:
-        identity_matches = _identity_matches(root, manifest)
+        identity_matches = release_sizes_are_safe and _identity_matches(root, manifest)
     except (
         AttributeError,
         OSError,
@@ -401,7 +613,11 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
 
     checksums = _parse_checksums(root / "checksums.txt")
     expected_checksum_files = set(names) - {"checksums.txt"} if names_are_valid else set()
-    checksum_valid = safe_paths and set(checksums) == expected_checksum_files
+    checksum_valid = (
+        safe_paths
+        and release_sizes_are_safe
+        and set(checksums) == expected_checksum_files
+    )
     if checksum_valid:
         try:
             checksum_valid = all(
@@ -420,7 +636,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
     )
 
     try:
-        lf_only = safe_paths and all(
+        lf_only = safe_paths and release_sizes_are_safe and all(
             b"\r\n" not in path.read_bytes() for path in paths if path.is_file()
         )
     except OSError:
@@ -434,12 +650,13 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
         )
     )
 
-    utf8_assets = safe_paths
-    for path in paths:
-        try:
-            path.read_text(encoding="utf-8", errors="strict")
-        except (OSError, UnicodeError):
-            utf8_assets = False
+    utf8_assets = safe_paths and release_sizes_are_safe
+    if utf8_assets:
+        for path in paths:
+            try:
+                path.read_text(encoding="utf-8", errors="strict")
+            except (OSError, UnicodeError):
+                utf8_assets = False
     checks.append(
         _check(
             "utf8_text_assets",
@@ -450,8 +667,16 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
     )
 
     try:
-        public_text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
-        safe_public_text = safe_paths and not SECRET_PATTERN.search(public_text)
+        public_text = (
+            "\n".join(path.read_text(encoding="utf-8") for path in paths)
+            if release_sizes_are_safe
+            else ""
+        )
+        safe_public_text = (
+            safe_paths
+            and release_sizes_are_safe
+            and not SECRET_PATTERN.search(public_text)
+        )
     except (UnicodeError, OSError):
         safe_public_text = False
     checks.append(
@@ -465,7 +690,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
 
     validation_report_path = root / "validation-report.json"
     validation_report_matches = False
-    if validation_report_path.is_file() and corpus_ready:
+    if release_sizes_are_safe and validation_report_path.is_file() and corpus_ready:
         try:
             published_report = json.loads(
                 validation_report_path.read_text(encoding="utf-8")
@@ -485,7 +710,7 @@ def build_publication_report(root: Path | str = ROOT) -> dict[str, Any]:
     serialized = [check.to_dict() for check in checks]
     failed = sum(check["status"] == "fail" for check in serialized)
     return {
-        "gate_version": "1.1.0",
+        "gate_version": GATE_VERSION,
         "release_version": manifest.get("version"),
         "status": "ready" if failed == 0 else "blocked",
         "check_count": len(serialized),

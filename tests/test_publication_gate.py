@@ -33,7 +33,7 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_release_manifest_has_one_explicit_versioned_identity(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("1.1.1", manifest["version"])
+        self.assertEqual("1.1.2", manifest["version"])
         self.assertEqual("1.1.0", manifest["schema_version"])
         self.assertEqual(
             "10.5281/zenodo.21761714", manifest["concept_doi"]
@@ -42,7 +42,7 @@ class PublicationGateTests(unittest.TestCase):
             "https://liftedpayments.com/payment-processing-statement-audit/",
             manifest["canonical_url"],
         )
-        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.1"))
+        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.2"))
         self.assertEqual(len(manifest["files"]), len(set(manifest["files"])))
         self.assertGreaterEqual(len(manifest["files"]), 20)
 
@@ -57,6 +57,7 @@ class PublicationGateTests(unittest.TestCase):
         self.assertIn("corpus_validation", {check["code"] for check in report["checks"]})
         self.assertIn("dependency_lock", {check["code"] for check in report["checks"]})
         self.assertIn("utf8_text_assets", {check["code"] for check in report["checks"]})
+        self.assertIn("immutable_tag_match", {check["code"] for check in report["checks"]})
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         if manifest["version_doi"] is None:
             self.assertEqual("blocked", report["status"])
@@ -152,6 +153,157 @@ class PublicationGateTests(unittest.TestCase):
             checks = {check["code"]: check["status"] for check in report["checks"]}
             self.assertEqual("fail", checks["required_release_assets"])
             self.assertEqual("blocked", report["status"])
+
+    def test_gate_blocks_an_undeclared_regular_file_in_the_release_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            (candidate / "undeclared-public-payload.txt").write_text(
+                "This file is not covered by the manifest or checksums.\n",
+                encoding="utf-8",
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("fail", checks["manifest_inventory"])
+            self.assertEqual("blocked", report["status"])
+
+    def test_gate_blocks_an_oversized_declared_text_asset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            oversized_name = "oversized-public-payload.txt"
+            (candidate / oversized_name).write_bytes(b"x" * (5 * 1024 * 1024 + 1))
+            manifest_path = candidate / "RELEASE-MANIFEST.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["files"].append(oversized_name)
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+            )
+            subprocess.run(
+                [sys.executable, "tools/update_checksums.py", "--write"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("fail", checks["release_size_limits"])
+            self.assertEqual("blocked", report["status"])
+
+    def test_gate_runs_the_candidate_validator_regression_suite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            validator_path = candidate / "tools/validate_audit.py"
+            validator = validator_path.read_text(encoding="utf-8")
+            validator = validator.replace(
+                '_EMAIL = re.compile(r"\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", re.I)',
+                '_EMAIL = re.compile(r"$^")',
+            )
+            self.assertIn('_EMAIL = re.compile(r"$^")', validator)
+            validator_path.write_text(validator, encoding="utf-8")
+
+            corpus = subprocess.run(
+                [sys.executable, "tools/validate_audit.py", "--corpus"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            (candidate / "validation-report.json").write_text(
+                corpus.stdout, encoding="utf-8"
+            )
+            subprocess.run(
+                [sys.executable, "tools/update_checksums.py", "--write"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("fail", checks["candidate_regression_suite"])
+            self.assertEqual("blocked", report["status"])
+
+    def test_gate_rejects_untrusted_manifest_identity_even_when_metadata_agrees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            manifest_path = candidate / "RELEASE-MANIFEST.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            old_concept_doi = manifest["concept_doi"]
+            manifest["concept_doi"] = "not-a-doi"
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+            )
+
+            codemeta_path = candidate / "codemeta.json"
+            codemeta = json.loads(codemeta_path.read_text(encoding="utf-8"))
+            codemeta["sameAs"] = [
+                value.replace(
+                    f"https://doi.org/{old_concept_doi}",
+                    "https://doi.org/not-a-doi",
+                )
+                for value in codemeta["sameAs"]
+            ]
+            codemeta_path.write_text(
+                json.dumps(codemeta, indent=2) + "\n", encoding="utf-8"
+            )
+            subprocess.run(
+                [sys.executable, "tools/update_checksums.py", "--write"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("fail", checks["manifest_identity"])
+            self.assertEqual("blocked", report["status"])
+
+    def test_gate_blocks_changes_masquerading_as_an_existing_release_tag(self):
+        tag_check = subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/tags/v1.1.1"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if tag_check.returncode != 0:
+            self.skipTest("v1.1.1 tag is required for the immutability regression")
+
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            with (candidate / "README.md").open("a", encoding="utf-8") as handle:
+                handle.write("\nUndisclosed rewrite of an immutable release.\n")
+            subprocess.run(
+                [sys.executable, "tools/update_checksums.py", "--write"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            manifest = json.loads(
+                (candidate / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
+            )
+            manifest["version"] = "1.1.1"
+            self.assertFalse(
+                self.gate._matches_existing_release_tag(
+                    candidate, manifest, manifest["files"]
+                )
+            )
 
     def test_gate_returns_a_structured_block_for_a_malformed_manifest(self):
         with tempfile.TemporaryDirectory() as directory:

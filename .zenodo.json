@@ -1,14 +1,14 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
   "upload_type": "dataset",
-  "description": "<p>A processor-neutral, machine-readable model for normalizing monthly merchant payment-processing statements without storing cardholder data. Version 1.1.1 hardens the schema 1.1.0 validator and publication gate against pathological numbers, malformed or traversing manifests, candidate-validator failure, incomplete asset inventories, and credential signatures across every declared release file.</p>",
+  "description": "<p>A processor-neutral, machine-readable model for normalizing monthly merchant payment-processing statements without storing cardholder data. Version 1.1.2 preserves the schema 1.1.0 contract and hardens the validator and publication gate with complete tree inventory, bounded assets, behavioral regression execution, spreadsheet-formula rejection, trusted identity checks, and immutable-tag protection.</p>",
   "creators": [
     {
       "name": "Lifted Payments",
       "affiliation": "Lifted Holdings"
     }
   ],
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publication_date": "2026-08-02",
   "access_right": "open",
   "license": "cc-by-4.0",
@@ -30,10 +30,10 @@
       "resource_type": "publication-technicalnote"
     },
     {
-      "identifier": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.1",
+      "identifier": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.2",
       "relation": "isSourceOf",
       "resource_type": "software"
     }
   ],
-  "notes": "All figures and validation vectors are synthetic and do not describe a real merchant. The model contains no cardholder data. The validation report records 2 accepted valid vectors and 14 correctly rejected invalid vectors. Package 1.1.1 preserves the schema 1.1.0 record contract."
+  "notes": "All figures and validation vectors are synthetic and do not describe a real merchant. The model contains no cardholder data. The validation report records 2 accepted valid vectors and 14 correctly rejected invalid vectors. Package 1.1.2 preserves the schema 1.1.0 record contract."
 }

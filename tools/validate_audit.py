@@ -28,7 +28,7 @@ from jsonschema import Draft202012Validator, FormatChecker, validators
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema/payment-statement-audit.schema.json"
-VALIDATOR_VERSION = "1.1.1"
+VALIDATOR_VERSION = "1.1.2"
 VALIDATION_DEPENDENCIES = (
     "attrs",
     "jsonschema",
@@ -119,6 +119,7 @@ _PROHIBITED_KEY = re.compile(
     r"bank_?account|account_?number|ssn|password|api_?key|secret|token)",
     re.I,
 )
+_SPREADSHEET_FORMULA = re.compile(r"^[\s\ufeff]*[=+\-@]")
 
 
 @dataclass(frozen=True, order=True)
@@ -627,6 +628,18 @@ def validate_csv_template(path: Path | str) -> list[ValidationIssue]:
                 "csv_example_count",
                 "/",
                 "CSV template must contain exactly one complete synthetic example row.",
+            )
+        ]
+    if any(
+        _SPREADSHEET_FORMULA.match(value)
+        for value in rows[0].values()
+        if isinstance(value, str)
+    ):
+        return [
+            ValidationIssue(
+                "csv_formula",
+                "/",
+                "CSV example contains a spreadsheet-formula prefix.",
             )
         ]
     try:

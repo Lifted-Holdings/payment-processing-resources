@@ -10,15 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 TITLE = "Lifted Payments Payment Statement Audit Model"
 CANONICAL_URL = "https://liftedpayments.com/payment-processing-statement-audit/"
 REPOSITORY_URL = "https://github.com/Lifted-Holdings/payment-processing-resources"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 SCHEMA_VERSION = "1.1.0"
 RELEASE_DATE = "2026-08-02"
-DOI = "10.5281/zenodo.21762767"
+DOI = "10.5281/zenodo.21763617"
 DOI_URL = f"https://doi.org/{DOI}"
 CONCEPT_DOI_URL = "https://doi.org/10.5281/zenodo.21761714"
 RELEASE_URL = (
     "https://github.com/Lifted-Holdings/payment-processing-resources/"
-    "releases/tag/v1.1.1"
+    "releases/tag/v1.1.2"
 )
 HUGGING_FACE_REPO_ID = "Liftedholdings/payment-statement-audit-model"
 KAGGLE_DATASET_ID = "liftedpayments/payment-statement-audit-model"
@@ -169,7 +169,7 @@ class ReleaseAssetTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("## Versioned release", readme)
-        self.assertIn("v1.1.1", readme)
+        self.assertIn("v1.1.2", readme)
         self.assertIn("August 2, 2026", readme)
         self.assertIn(CANONICAL_URL, readme)
         self.assertIn("CITATION.cff", readme)
@@ -181,7 +181,7 @@ class ReleaseAssetTests(unittest.TestCase):
 
         self.assertIn(DOI_URL, llms)
         self.assertIn(
-            "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.1",
+            "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.2",
             llms,
         )
 
