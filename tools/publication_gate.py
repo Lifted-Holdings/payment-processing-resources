@@ -22,6 +22,7 @@ if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
 from release_provenance import inspect_repository  # noqa: E402
+from public_release_attestation import attest_public_release  # noqa: E402
 
 
 GATE_VERSION = "2.0.0"
@@ -76,8 +77,10 @@ REQUIRED_RELEASE_ASSETS = {
     "test-vectors/manifest.json",
     "tests/test_audit_validator.py",
     "tests/test_publication_gate.py",
+    "tests/test_public_release_attestation.py",
     "tests/test_release_assets.py",
     "tests/test_release_provenance.py",
+    "tools/public_release_attestation.py",
     "tools/publication_gate.py",
     "tools/release_provenance.py",
     "tools/update_checksums.py",
@@ -735,10 +738,20 @@ def build_publication_report(
     )
 
     if mode == "published":
+        attestation_ready = False
+        if all(check.status == "pass" for check in checks):
+            try:
+                attestation_ready = attest_public_release(
+                    root,
+                    manifest,
+                    expected_commit=provenance.head_commit,
+                ).verified
+            except (OSError, TypeError, ValueError):
+                attestation_ready = False
         checks.append(
             _check(
                 "public_release_attestation",
-                False,
+                attestation_ready,
                 "Public GitHub, Zenodo, DOI, and mirror artifacts match the tagged release.",
                 "Public release attestation is unavailable or did not match the tagged release.",
             )

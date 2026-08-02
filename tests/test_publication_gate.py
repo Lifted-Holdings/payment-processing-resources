@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +134,49 @@ class PublicationGateTests(unittest.TestCase):
         self.assertEqual("valid", report["status"])
         self.assertEqual(0, result.returncode)
 
+    def test_published_mode_requires_and_reports_external_attestation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
+            with mock.patch.object(
+                self.gate,
+                "inspect_repository",
+                return_value=SimpleNamespace(
+                    publication_ready=True, head_commit="a" * 40
+                ),
+            ), mock.patch.object(
+                self.gate,
+                "attest_public_release",
+                return_value=SimpleNamespace(verified=True),
+            ) as attestor:
+                report = self.gate.build_publication_report(candidate, mode="published")
+
+        checks = {check["code"]: check["status"] for check in report["checks"]}
+        self.assertEqual("verified", report["status"])
+        self.assertEqual("pass", checks["public_release_attestation"])
+        attestor.assert_called_once()
+
+    def test_published_mode_blocks_when_external_attestation_disagrees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
+            with mock.patch.object(
+                self.gate,
+                "inspect_repository",
+                return_value=SimpleNamespace(
+                    publication_ready=True, head_commit="a" * 40
+                ),
+            ), mock.patch.object(
+                self.gate,
+                "attest_public_release",
+                return_value=SimpleNamespace(verified=False),
+            ):
+                report = self.gate.build_publication_report(candidate, mode="published")
+
+        checks = {check["code"]: check["status"] for check in report["checks"]}
+        self.assertEqual("blocked", report["status"])
+        self.assertEqual("fail", checks["public_release_attestation"])
+
     def test_gate_report_contains_hashes_and_no_file_contents(self):
         report = self.gate.build_publication_report(ROOT)
         rendered = json.dumps(report, sort_keys=True)
@@ -206,8 +251,10 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_gate_requires_every_security_critical_release_asset(self):
         critical_assets = (
+            "tools/public_release_attestation.py",
             "tools/publication_gate.py",
             "tools/release_provenance.py",
+            "tests/test_public_release_attestation.py",
             "tests/test_release_provenance.py",
         )
         for critical_asset in critical_assets:
