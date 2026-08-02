@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -9,10 +10,17 @@ ROOT = Path(__file__).resolve().parents[1]
 TITLE = "Lifted Payments Payment Statement Audit Model"
 CANONICAL_URL = "https://liftedpayments.com/payment-processing-statement-audit/"
 REPOSITORY_URL = "https://github.com/Lifted-Holdings/payment-processing-resources"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 RELEASE_DATE = "2026-08-02"
-DOI = "10.5281/zenodo.21761715"
+DOI = "10.5281/zenodo.21762273"
 DOI_URL = f"https://doi.org/{DOI}"
+CONCEPT_DOI_URL = "https://doi.org/10.5281/zenodo.21761714"
+RELEASE_URL = (
+    "https://github.com/Lifted-Holdings/payment-processing-resources/"
+    "releases/tag/v1.1.0"
+)
+HUGGING_FACE_REPO_ID = "Liftedholdings/payment-statement-audit-model"
+KAGGLE_DATASET_ID = "liftedpayments/payment-statement-audit-model"
 
 
 class ReleaseAssetTests(unittest.TestCase):
@@ -37,7 +45,7 @@ class ReleaseAssetTests(unittest.TestCase):
             for item in metadata["related_identifiers"]
         }
         self.assertIn((CANONICAL_URL, "isDocumentedBy"), related)
-        self.assertIn((REPOSITORY_URL, "isSourceOf"), related)
+        self.assertIn((RELEASE_URL, "isSourceOf"), related)
 
     def test_codemeta_describes_the_same_dataset(self):
         metadata = json.loads((ROOT / "codemeta.json").read_text(encoding="utf-8"))
@@ -91,12 +99,11 @@ class ReleaseAssetTests(unittest.TestCase):
             any("synthetic" in note.lower() for note in example["review_notes"])
         )
 
-    def test_checksums_cover_the_three_portable_data_files(self):
-        expected_files = {
-            "payment-statement-audit-template.csv",
-            "schema/payment-statement-audit.schema.json",
-            "examples/payment-statement-audit-example.json",
-        }
+    def test_checksums_cover_every_declared_release_file(self):
+        manifest = json.loads(
+            (ROOT / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
+        )
+        expected_files = set(manifest["files"]) - {"checksums.txt"}
         checksum_lines = (ROOT / "checksums.txt").read_text(encoding="utf-8").splitlines()
         checksums = {}
         for line in checksum_lines:
@@ -108,11 +115,31 @@ class ReleaseAssetTests(unittest.TestCase):
             actual_digest = hashlib.sha256((ROOT / filename).read_bytes()).hexdigest()
             self.assertEqual(expected_digest, actual_digest)
 
+    def test_release_files_are_pinned_to_lf_by_git(self):
+        manifest = json.loads(
+            (ROOT / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
+        )
+        release_files = manifest["files"]
+        result = subprocess.run(
+            ["git", "check-attr", "eol", "--", *release_files],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        observed = {
+            line.split(": ", maxsplit=2)[0]: line.split(": ", maxsplit=2)[2]
+            for line in result.stdout.splitlines()
+        }
+        self.assertEqual(observed, {filename: "lf" for filename in release_files})
+
     def test_readme_presents_the_versioned_release_and_canonical_citation(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("## Versioned release", readme)
-        self.assertIn("v1.0.0", readme)
+        self.assertIn("v1.1.0", readme)
         self.assertIn("August 2, 2026", readme)
         self.assertIn(CANONICAL_URL, readme)
         self.assertIn("CITATION.cff", readme)
@@ -124,9 +151,50 @@ class ReleaseAssetTests(unittest.TestCase):
 
         self.assertIn(DOI_URL, llms)
         self.assertIn(
-            "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.0.0",
+            "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.0",
             llms,
         )
+
+    def test_huggingface_dataset_card_matches_release_identity(self):
+        card_path = ROOT / "distribution/huggingface/README.md"
+        self.assertTrue(card_path.is_file(), "Hugging Face dataset card is missing")
+        card = card_path.read_text(encoding="utf-8")
+        self.assertTrue(card.startswith("---\n"))
+        _, frontmatter, body = card.split("---", maxsplit=2)
+
+        self.assertRegex(frontmatter, r"(?m)^license: cc-by-4\.0$")
+        self.assertRegex(
+            frontmatter, rf'(?m)^pretty_name: "{re.escape(TITLE)}"$'
+        )
+        self.assertRegex(frontmatter, r"(?m)^- en$")
+        for tag in ("tabular", "finance", "payments", "merchant-services"):
+            self.assertRegex(frontmatter, rf"(?m)^- {re.escape(tag)}$")
+
+        for identity_url in (CANONICAL_URL, DOI_URL, CONCEPT_DOI_URL, RELEASE_URL):
+            self.assertIn(identity_url, body)
+        self.assertIn(VERSION, body)
+        self.assertIn("synthetic", body.lower())
+        self.assertIn("no real merchant", body.lower())
+
+    def test_kaggle_distribution_metadata_matches_release_identity(self):
+        metadata_path = ROOT / "distribution/kaggle/dataset-metadata.json"
+        description_path = ROOT / "distribution/kaggle/README.md"
+        self.assertTrue(metadata_path.is_file(), "Kaggle metadata is missing")
+        self.assertTrue(description_path.is_file(), "Kaggle description is missing")
+        metadata = json.loads(
+            metadata_path.read_text(encoding="utf-8")
+        )
+        description = description_path.read_text(encoding="utf-8")
+
+        self.assertEqual(metadata["id"], KAGGLE_DATASET_ID)
+        self.assertEqual(metadata["title"], TITLE)
+        self.assertIn("merchant statement", metadata["subtitle"].lower())
+        self.assertIn({"name": "CC-BY-4.0"}, metadata["licenses"])
+        for identity_url in (CANONICAL_URL, DOI_URL, CONCEPT_DOI_URL, RELEASE_URL):
+            self.assertIn(identity_url, description)
+        self.assertIn(VERSION, description)
+        self.assertIn("synthetic", description.lower())
+        self.assertIn("no real merchant", description.lower())
 
 
 if __name__ == "__main__":

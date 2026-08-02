@@ -1,0 +1,17 @@
+{
+  "invalid": {
+    "activity-mismatch.json": ["activity_pair"],
+    "duplicate-category.json": ["duplicate_fee_category"],
+    "fee-sum-mismatch.json": ["fee_group_reconciliation"],
+    "fractional-cent.json": ["money_precision"],
+    "invalid-date.json": ["schema_format"],
+    "net-fee-mismatch.json": ["net_fee_reconciliation"],
+    "overlong-period.json": ["period_duration"],
+    "overprecise-rate.json": ["rate_precision"],
+    "security-data-in-note.json": ["prohibited_payment_data"],
+    "reversed-period.json": ["period_order"],
+    "unknown-field.json": ["schema_additionalProperties"],
+    "wrong-average-ticket.json": ["average_ticket_mismatch"],
+    "wrong-effective-rate.json": ["effective_rate_mismatch"]
+  }
+}

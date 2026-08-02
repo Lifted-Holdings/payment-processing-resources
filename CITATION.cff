@@ -4,9 +4,9 @@ title: "Lifted Payments Payment Statement Audit Model"
 type: dataset
 authors:
   - name: "Lifted Payments"
-version: 1.0.0
+version: 1.1.0
 date-released: 2026-08-02
-doi: "10.5281/zenodo.21761715"
+doi: "10.5281/zenodo.21762273"
 url: "https://liftedpayments.com/payment-processing-statement-audit/"
 repository-code: "https://github.com/Lifted-Holdings/payment-processing-resources"
 license: CC-BY-4.0
