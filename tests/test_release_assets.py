@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -107,6 +108,30 @@ class ReleaseAssetTests(unittest.TestCase):
         for filename, expected_digest in checksums.items():
             actual_digest = hashlib.sha256((ROOT / filename).read_bytes()).hexdigest()
             self.assertEqual(expected_digest, actual_digest)
+
+    def test_release_files_are_pinned_to_lf_by_git(self):
+        release_files = [
+            "payment-statement-audit-template.csv",
+            "schema/payment-statement-audit.schema.json",
+            "examples/payment-statement-audit-example.json",
+            "CITATION.cff",
+            "README.md",
+            "checksums.txt",
+        ]
+        result = subprocess.run(
+            ["git", "check-attr", "eol", "--", *release_files],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        observed = {
+            line.split(": ", maxsplit=2)[0]: line.split(": ", maxsplit=2)[2]
+            for line in result.stdout.splitlines()
+        }
+        self.assertEqual(observed, {filename: "lf" for filename in release_files})
 
     def test_readme_presents_the_versioned_release_and_canonical_citation(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
