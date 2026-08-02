@@ -19,7 +19,7 @@ This dictionary defines v1.1.0 of the Lifted Payments Payment Statement Audit Mo
 | `effective_rate` | decimal or null | yes | `total_processing_fees / card_volume`, rounded half up to six decimal places. Store `2.2918%` as `0.022918`. It must be `null` when `card_volume` is zero. |
 | `average_ticket` | USD or null | yes | `card_volume / transaction_count`, rounded half up to cents. It must be `null` when `transaction_count` is zero. |
 | `pricing_model` | enum | yes | How pricing is presented on the source statement: `interchange_plus`, `flat_rate`, `tiered`, `subscription`, `dual_pricing`, or `unknown`. This is not an interchange-qualification opinion. |
-| `fee_groups` | array | yes | One entry per used category. Categories are unique, amounts are gross nonnegative charges, and their exact cent sum equals `gross_processing_fees`. |
+| `fee_groups` | array | yes | One entry per used category. Categories are unique, amounts are gross nonnegative charges, and their exact cent sum equals `gross_processing_fees`. For a zero-activity, zero-fee statement, use one `other` entry with amount `0.00` because schema v1.1.0 requires at least one group. |
 | `review_notes` | string array | no | Short explanations of classification decisions. Never put merchant identity, card/account data, credentials, or secrets here. |
 
 All USD fields permit at most two decimal places. Rates permit at most six decimal places. Numbers must be finite. The validator imposes high operational ceilings to reject account-number-shaped or clearly implausible input; those ceilings are data-safety bounds, not merchant eligibility limits.

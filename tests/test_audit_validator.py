@@ -154,6 +154,60 @@ class AuditValidatorTests(unittest.TestCase):
         self.assertEqual([], self.validator.validate_record(zero))
         self.assertIn("activity_pair", self.issue_codes(inconsistent))
 
+        zero_fee = self.mutated(
+            lambda row: row.update(
+                {
+                    "card_volume": Decimal("0.00"),
+                    "transaction_count": 0,
+                    "gross_processing_fees": Decimal("0.00"),
+                    "statement_credits": Decimal("0.00"),
+                    "total_processing_fees": Decimal("0.00"),
+                    "effective_rate": None,
+                    "average_ticket": None,
+                    "fee_groups": [
+                        {"category": "other", "amount": Decimal("0.00")}
+                    ],
+                }
+            )
+        )
+        self.assertEqual([], self.validator.validate_record(zero_fee))
+
+    def test_published_half_up_rounding_is_enforced_at_exact_ties(self):
+        average_ticket_tie = self.mutated(
+            lambda row: row.update(
+                {
+                    "card_volume": Decimal("0.01"),
+                    "transaction_count": 2,
+                    "gross_processing_fees": Decimal("0.00"),
+                    "statement_credits": Decimal("0.00"),
+                    "total_processing_fees": Decimal("0.00"),
+                    "effective_rate": Decimal("0.000000"),
+                    "average_ticket": Decimal("0.01"),
+                    "fee_groups": [
+                        {"category": "other", "amount": Decimal("0.00")}
+                    ],
+                }
+            )
+        )
+        effective_rate_tie = self.mutated(
+            lambda row: row.update(
+                {
+                    "card_volume": Decimal("20000.00"),
+                    "transaction_count": 1,
+                    "gross_processing_fees": Decimal("0.01"),
+                    "statement_credits": Decimal("0.00"),
+                    "total_processing_fees": Decimal("0.01"),
+                    "effective_rate": Decimal("0.000001"),
+                    "average_ticket": Decimal("20000.00"),
+                    "fee_groups": [
+                        {"category": "other", "amount": Decimal("0.01")}
+                    ],
+                }
+            )
+        )
+        self.assertEqual([], self.validator.validate_record(average_ticket_tie))
+        self.assertEqual([], self.validator.validate_record(effective_rate_tie))
+
     def test_non_finite_numbers_and_unknown_fields_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "non_finite_number"):
             self.validator.loads_record('{"card_volume": NaN}')
@@ -228,6 +282,20 @@ class AuditValidatorTests(unittest.TestCase):
         self.assertIn("prohibited_payment_data", self.issue_codes(pan))
         self.assertIn("prohibited_payment_data", self.issue_codes(cvv))
 
+    def test_identity_bank_and_credential_values_in_notes_are_rejected(self):
+        prohibited_notes = (
+            "Owner email is merchant@example.com",
+            "Owner SSN is 123-45-6789",
+            "Routing number: 021000021",
+            "Password is CorrectHorseBatteryStaple",
+        )
+        for note in prohibited_notes:
+            with self.subTest(note_kind=note.split()[0].lower()):
+                record = self.mutated(
+                    lambda row, value=note: row.update({"review_notes": [value]})
+                )
+                self.assertIn("prohibited_payment_data", self.issue_codes(record))
+
     def test_errors_never_echo_input_values(self):
         sensitive = "4111 1111 1111 1111"
         record = self.mutated(
@@ -252,6 +320,34 @@ class AuditValidatorTests(unittest.TestCase):
             ROOT / "payment-statement-audit-template.csv"
         )
         self.assertEqual([], issues)
+
+    def test_csv_rejects_spreadsheet_formula_payloads_without_echoing_them(self):
+        formula_prefixes = (
+            "=1+1",
+            "+1+1",
+            "-1+1",
+            "@SUM(1)",
+            "\t=1+1",
+            "\ufeff=1+1",
+        )
+        for marker in formula_prefixes:
+            with self.subTest(prefix=marker[0]):
+                with tempfile.TemporaryDirectory() as directory:
+                    candidate = Path(directory) / "statement.csv"
+                    source = (
+                        ROOT / "payment-statement-audit-template.csv"
+                    ).read_text(encoding="utf-8")
+                    lines = source.splitlines()
+                    lines[1] = lines[1].rsplit(",", maxsplit=1)[0] + "," + marker
+                    candidate.write_text(
+                        "\n".join(lines) + "\n", encoding="utf-8"
+                    )
+
+                    issues = self.validator.validate_csv_template(candidate)
+                    self.assertIn("csv_formula", {issue.code for issue in issues})
+                    self.assertNotIn(
+                        marker, json.dumps([issue.to_dict() for issue in issues])
+                    )
 
     def test_shipped_corpus_has_broad_expected_failure_coverage(self):
         report = self.validator.build_corpus_report(ROOT)

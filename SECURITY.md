@@ -9,13 +9,17 @@ Security fixes are applied to the newest versioned release. Published GitHub and
 The release gate is designed to fail closed when it encounters:
 
 - a malformed, incomplete, duplicated, absolute, or path-traversing manifest;
+- an undeclared file in the candidate release tree;
 - a missing, symlinked, non-UTF-8, or non-LF declared artifact;
+- an excessive file count, individual asset size, or aggregate release size;
 - a checksum mismatch or undeclared security-critical file;
 - a validator that fails, times out, emits malformed output, or does not reproduce the corpus;
+- a candidate validator that fails its bounded behavioral regression suite;
 - an unpinned validation dependency or stale validation report;
 - inconsistent package, schema, citation, DOI, or source-release identity;
+- a candidate that reuses an existing release version while changing its tagged files;
 - common private-key, cloud-key, repository-token, model-token, chat-token, or live payment-key signatures anywhere in the declared release; or
-- synthetic records that violate structural, accounting, precision, period, privacy, size, depth, or safe-number rules.
+- synthetic records that violate structural, accounting, precision, period, privacy, size, depth, safe-number, or spreadsheet-formula rules.
 
 Candidate validation runs in a bounded child process and must return a machine-readable corpus report. Gate output contains fixed rule messages and hashes, never released file contents or submitted statement values.
 
