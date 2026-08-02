@@ -35,7 +35,7 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_release_manifest_has_one_explicit_versioned_identity(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("1.1.2", manifest["version"])
+        self.assertEqual("1.1.3", manifest["version"])
         self.assertEqual("1.1.0", manifest["schema_version"])
         self.assertEqual(
             "10.5281/zenodo.21761714", manifest["concept_doi"]
@@ -44,7 +44,7 @@ class PublicationGateTests(unittest.TestCase):
             "https://liftedpayments.com/payment-processing-statement-audit/",
             manifest["canonical_url"],
         )
-        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.2"))
+        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.3"))
         self.assertEqual(len(manifest["files"]), len(set(manifest["files"])))
         self.assertGreaterEqual(len(manifest["files"]), 20)
 

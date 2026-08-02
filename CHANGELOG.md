@@ -2,6 +2,15 @@
 
 All notable changes to the versioned dataset package are recorded here. Published release artifacts remain immutable.
 
+## 1.1.3 - 2026-08-02
+
+- Split portable package validation from publication readiness so a tagless archive can never claim release provenance.
+- Require a clean committed tree, authoritative origin, complete remote tag inventory, exact local/remote tag alignment, and monotonic new versions.
+- Run static inventory, path, size, encoding, checksum, credential-signature, identity, and provenance checks before executing candidate Python.
+- Add a bounded non-executing public attestor for GitHub release assets, Zenodo metadata and bytes, DOI resolution, Hugging Face archive equality, and Software Heritage branch/tag provenance.
+- Reject unsafe redirects, oversized responses, archive traversal, case-fold aliases, symlinks, undeclared members, digest mismatches, and public identity drift.
+- Add 20 provenance and external-attestation regressions while preserving the schema 1.1.0 record contract.
+
 ## 1.1.2 - 2026-08-02
 
 - Require the publication gate to compare the manifest with the complete candidate release tree.

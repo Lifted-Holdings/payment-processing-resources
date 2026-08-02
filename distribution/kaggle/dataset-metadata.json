@@ -1,7 +1,7 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
   "subtitle": "A processor-neutral schema and synthetic merchant statement audit example",
-  "description": "Package 1.1.2 of the Lifted Payments processor-neutral model for normalizing monthly merchant payment-processing statement totals, preserving the schema 1.1.0 record contract. The package contains a CSV template, JSON Schema Draft 2020-12 contract, Decimal-safe companion validator, methodology, synthetic adversarial vectors, reproducible validation report, citation metadata, and SHA-256 checksums. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: https://doi.org/10.5281/zenodo.21763617 . No real merchant or cardholder data is included.",
+  "description": "Package 1.1.3 of the Lifted Payments processor-neutral model for normalizing monthly merchant payment-processing statement totals, preserving the schema 1.1.0 record contract. The package contains a CSV template, JSON Schema Draft 2020-12 contract, Decimal-safe companion validator, methodology, synthetic adversarial vectors, reproducible validation report, citation metadata, and SHA-256 checksums. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: https://doi.org/10.5281/zenodo.21764642 . No real merchant or cardholder data is included.",
   "id": "liftedpayments/payment-statement-audit-model",
   "licenses": [
     {
@@ -23,7 +23,7 @@
     },
     {
       "path": "CITATION.cff",
-      "description": "Citation metadata for package version 1.1.2."
+      "description": "Citation metadata for package version 1.1.3."
     },
     {
       "path": "codemeta.json",
