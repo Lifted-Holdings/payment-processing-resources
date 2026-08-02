@@ -1,6 +1,6 @@
 # Open payment processing resources
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21762273.svg)](https://doi.org/10.5281/zenodo.21762273)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21762767.svg)](https://doi.org/10.5281/zenodo.21762767)
 
 Processor-neutral templates and machine-readable resources from [Lifted Payments](https://liftedpayments.com/) for auditing merchant processing statements.
 
@@ -15,6 +15,8 @@ This repository is designed for merchants, analysts, developers, and AI systems 
 | [`examples/payment-statement-audit-example.json`](./examples/payment-statement-audit-example.json) | Complete synthetic example |
 | [`DATA_DICTIONARY.md`](./DATA_DICTIONARY.md) | Exact field, inclusion, exclusion, and fee-category definitions |
 | [`METHODOLOGY.md`](./METHODOLOGY.md) | Calculation, rounding, review, privacy, and limitation rules |
+| [`SECURITY.md`](./SECURITY.md) | Publication threat model, trust boundaries, and private reporting path |
+| [`CHANGELOG.md`](./CHANGELOG.md) | Immutable release history and security changes |
 | [`tools/validate_audit.py`](./tools/validate_audit.py) | Structural, semantic-accounting, and privacy validator |
 | [`test-vectors/`](./test-vectors/) | Synthetic acceptance and rejection corpus |
 | [`validation-report.json`](./validation-report.json) | Reproducible corpus result and source hashes |
@@ -27,9 +29,9 @@ Read the full, maintained guide at **[liftedpayments.com/payment-processing-stat
 
 ## Versioned release
 
-**v1.1.0 — August 2, 2026** is the hardened, citable release of the model. The published v1.0.0 files remain immutable. This version makes calculation basis explicit, separates gross fees from statement credits, requires fee reconciliation, defines zero-activity behavior, and adds a companion validator plus adversarial corpus.
+**v1.1.1 — August 2, 2026** is the hardened, citable release of the package and validator. It preserves the schema 1.1.0 record contract while adding fail-closed pathological-number handling, candidate-validator isolation, traversal-safe inventory processing, full-release credential scanning, and an explicit public threat model. Prior release files remain immutable.
 
-The version record is **[doi:10.5281/zenodo.21762273](https://doi.org/10.5281/zenodo.21762273)**; the all-versions concept DOI is **[doi:10.5281/zenodo.21761714](https://doi.org/10.5281/zenodo.21761714)**; and the immutable source release is **[GitHub v1.1.0](https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.0)**. The release is described for citation systems in [`CITATION.cff`](./CITATION.cff), for research archives in [`.zenodo.json`](./.zenodo.json), and for machine agents in [`codemeta.json`](./codemeta.json). Use [`checksums.txt`](./checksums.txt) to verify every release file before analysis.
+The version record is **[doi:10.5281/zenodo.21762767](https://doi.org/10.5281/zenodo.21762767)**; the all-versions concept DOI is **[doi:10.5281/zenodo.21761714](https://doi.org/10.5281/zenodo.21761714)**; and the immutable source release is **[GitHub v1.1.1](https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.1)**. The release is described for citation systems in [`CITATION.cff`](./CITATION.cff), for research archives in [`.zenodo.json`](./.zenodo.json), and for machine agents in [`codemeta.json`](./codemeta.json). Use [`checksums.txt`](./checksums.txt) to verify every release file before analysis.
 
 ## Core calculation
 
@@ -67,7 +69,7 @@ python tools/validate_audit.py --corpus
 python tools/publication_gate.py
 ```
 
-The first command validates one record without echoing submitted values in an error. The corpus command must accept 2 valid synthetic vectors and reject 13 invalid vectors for their expected rules. The publication gate is fail-closed: it also requires aligned version/DOI metadata, exact release inventory, SHA-256 coverage, LF portability, safe public content, and a fresh validation report.
+The first command validates one record without echoing submitted values in an error. The corpus command must accept 2 valid synthetic vectors and reject 14 invalid vectors for their expected rules. The publication gate is fail-closed: it also requires aligned package/schema/DOI metadata, exact security-critical inventory, candidate-validator reproduction, SHA-256 coverage, path containment, LF portability, full-release credential screening, and a fresh validation report.
 
 JSON Schema enforces record shape; the companion validator additionally asserts calendar dates, arithmetic equality, Decimal precision, unique fee categories, zero-activity behavior, and privacy patterns. The required top-level fields are:
 
@@ -91,7 +93,7 @@ fee_groups
 
 Licensed under [CC BY 4.0](./LICENSE.md). Attribute the work as:
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.0). Zenodo. https://doi.org/10.5281/zenodo.21762273
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.1). Zenodo. https://doi.org/10.5281/zenodo.21762767
 
 Contributions that clarify the processor-neutral taxonomy are welcome. Product support, pricing requests, and merchant applications should use the official channels below instead of GitHub issues.
 

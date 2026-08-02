@@ -1,4 +1,8 @@
 {
+  "valid": [
+    "standard-month.json",
+    "zero-activity-month.json"
+  ],
   "invalid": {
     "activity-mismatch.json": ["activity_pair"],
     "duplicate-category.json": ["duplicate_fee_category"],
@@ -8,6 +12,7 @@
     "net-fee-mismatch.json": ["net_fee_reconciliation"],
     "overlong-period.json": ["period_duration"],
     "overprecise-rate.json": ["rate_precision"],
+    "pathological-number.json": ["number_range"],
     "security-data-in-note.json": ["prohibited_payment_data"],
     "reversed-period.json": ["period_order"],
     "unknown-field.json": ["schema_additionalProperties"],

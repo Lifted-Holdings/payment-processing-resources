@@ -1,7 +1,10 @@
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -30,7 +33,8 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_release_manifest_has_one_explicit_versioned_identity(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("1.1.0", manifest["version"])
+        self.assertEqual("1.1.1", manifest["version"])
+        self.assertEqual("1.1.0", manifest["schema_version"])
         self.assertEqual(
             "10.5281/zenodo.21761714", manifest["concept_doi"]
         )
@@ -38,7 +42,7 @@ class PublicationGateTests(unittest.TestCase):
             "https://liftedpayments.com/payment-processing-statement-audit/",
             manifest["canonical_url"],
         )
-        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.0"))
+        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.1"))
         self.assertEqual(len(manifest["files"]), len(set(manifest["files"])))
         self.assertGreaterEqual(len(manifest["files"]), 20)
 
@@ -57,7 +61,7 @@ class PublicationGateTests(unittest.TestCase):
         if manifest["version_doi"] is None:
             self.assertEqual("blocked", report["status"])
             self.assertIn(
-                "version_doi_reserved",
+                "version_doi_declared",
                 {check["code"] for check in report["checks"] if check["status"] == "fail"},
             )
 
@@ -95,6 +99,201 @@ class PublicationGateTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual("checksums.txt is current\n", result.stdout)
+
+    def test_gate_scans_every_declared_asset_for_common_secret_signatures(self):
+        signatures = (
+            "AKIA" + "IOSFODNN7EXAMPLE",
+            "sk-proj-" + ("A" * 32),
+            "sk-ant-" + ("B" * 32),
+            "ya29." + ("C" * 32),
+        )
+        for signature in signatures:
+            with self.subTest(prefix=signature[:7]):
+                with tempfile.TemporaryDirectory() as directory:
+                    candidate = Path(directory) / "release"
+                    shutil.copytree(ROOT, candidate)
+                    with (candidate / "LICENSE.md").open(
+                        "a", encoding="utf-8"
+                    ) as handle:
+                        handle.write("\n" + signature + "\n")
+
+                    report = self.gate.build_publication_report(candidate)
+                    checks = {
+                        check["code"]: check["status"] for check in report["checks"]
+                    }
+                    self.assertEqual("fail", checks["public_content_safety"])
+                    self.assertEqual("blocked", report["status"])
+
+    def test_gate_executes_the_validator_from_the_candidate_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            (candidate / "tools/validate_audit.py").write_text(
+                'raise RuntimeError("tampered validator")\n', encoding="utf-8"
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("fail", checks["corpus_validation"])
+            self.assertEqual("blocked", report["status"])
+
+    def test_gate_requires_every_security_critical_release_asset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            manifest_path = candidate / "RELEASE-MANIFEST.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["files"].remove("tools/publication_gate.py")
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("fail", checks["required_release_assets"])
+            self.assertEqual("blocked", report["status"])
+
+    def test_gate_returns_a_structured_block_for_a_malformed_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            (candidate / "RELEASE-MANIFEST.json").write_text(
+                "{not-json", encoding="utf-8"
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            self.assertEqual("blocked", report["status"])
+            self.assertEqual("manifest_read", report["checks"][0]["code"])
+            self.assertEqual("fail", report["checks"][0]["status"])
+
+    def test_manifest_traversal_is_blocked_without_reading_outside_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            candidate = parent / "release"
+            shutil.copytree(ROOT, candidate)
+            (parent / "outside.txt").write_text(
+                "AKIA" + "IOSFODNN7EXAMPLE", encoding="utf-8"
+            )
+            manifest_path = candidate / "RELEASE-MANIFEST.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["files"].append("../outside.txt")
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+            )
+
+            paths, safe = self.gate._safe_file_paths(candidate, manifest["files"])
+            self.assertFalse(safe)
+            self.assertNotIn((parent / "outside.txt").resolve(), paths)
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("blocked", report["status"])
+            self.assertEqual("fail", checks["manifest_inventory"])
+            self.assertEqual("fail", checks["public_content_safety"])
+
+    def test_manifest_rejects_noncanonical_aliases_of_the_same_file(self):
+        paths, safe = self.gate._safe_file_paths(
+            ROOT, ["README.md", "./README.md"]
+        )
+        self.assertFalse(safe)
+        self.assertEqual([ROOT / "README.md"], paths)
+
+    def test_gate_blocks_a_missing_identity_asset_without_throwing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            (candidate / "README.md").unlink()
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("blocked", report["status"])
+            self.assertEqual("fail", checks["manifest_inventory"])
+            self.assertEqual("fail", checks["release_identity"])
+
+    def test_gate_blocks_non_utf8_integrity_metadata_without_throwing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            (candidate / "checksums.txt").write_bytes(b"\xff\xfe\x00")
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("blocked", report["status"])
+            self.assertEqual("fail", checks["release_checksums"])
+            self.assertEqual("fail", checks["utf8_text_assets"])
+
+    def test_gate_rejects_an_artifact_beneath_a_symlinked_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            candidate = parent / "release"
+            shutil.copytree(ROOT, candidate)
+            target = candidate / "real-assets"
+            target.mkdir()
+            (target / "nested.txt").write_text("safe", encoding="utf-8")
+            alias = candidate / "alias"
+            try:
+                os.symlink(target, alias, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            paths, safe = self.gate._safe_file_paths(
+                candidate, ["alias/nested.txt"]
+            )
+            self.assertFalse(safe)
+            self.assertEqual([], paths)
+
+    def test_release_identity_includes_publication_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            metadata_path = candidate / ".zenodo.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["publication_date"] = "1900-01-01"
+            metadata_path.write_text(
+                json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
+            )
+            subprocess.run(
+                [sys.executable, "tools/update_checksums.py", "--write"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            report = self.gate.build_publication_report(candidate)
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("blocked", report["status"])
+            self.assertEqual("fail", checks["release_identity"])
+            self.assertEqual("pass", checks["release_checksums"])
+
+    def test_non_object_identity_documents_block_without_throwing(self):
+        identity_files = (
+            ".zenodo.json",
+            "codemeta.json",
+            "schema/payment-statement-audit.schema.json",
+            "examples/payment-statement-audit-example.json",
+        )
+        for filename in identity_files:
+            with self.subTest(filename=filename):
+                with tempfile.TemporaryDirectory() as directory:
+                    candidate = Path(directory) / "release"
+                    shutil.copytree(ROOT, candidate)
+                    (candidate / filename).write_text("[]\n", encoding="utf-8")
+                    subprocess.run(
+                        [sys.executable, "tools/update_checksums.py", "--write"],
+                        cwd=candidate,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                    )
+
+                    report = self.gate.build_publication_report(candidate)
+                    checks = {
+                        check["code"]: check["status"] for check in report["checks"]
+                    }
+                    self.assertEqual("blocked", report["status"])
+                    self.assertEqual("fail", checks["release_identity"])
 
 
 if __name__ == "__main__":

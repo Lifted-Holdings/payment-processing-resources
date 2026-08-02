@@ -1,10 +1,12 @@
 import copy
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
-from decimal import Decimal
+from decimal import Decimal, Inexact, localcontext
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -109,6 +111,14 @@ class AuditValidatorTests(unittest.TestCase):
         self.assertIn("effective_rate_mismatch", self.issue_codes(wrong_rate))
         self.assertIn("average_ticket_mismatch", self.issue_codes(wrong_ticket))
 
+    def test_decimal_math_is_independent_of_the_callers_context(self):
+        with localcontext() as context:
+            context.prec = 4
+            context.Emax = 9
+            context.Emin = -9
+            context.traps[Inexact] = True
+            self.assertEqual([], self.validator.validate_record(self.valid_record))
+
     def test_money_and_rate_precision_are_explicit(self):
         fractional_cent = self.mutated(
             lambda row: row.update({"card_volume": Decimal("125000.001")})
@@ -149,6 +159,39 @@ class AuditValidatorTests(unittest.TestCase):
             self.validator.loads_record('{"card_volume": NaN}')
         unknown = self.mutated(lambda row: row.update({"merchant_name": "Example"}))
         self.assertIn("schema_additionalProperties", self.issue_codes(unknown))
+
+    def test_pathological_number_literals_fail_closed_without_decimal_crashes(self):
+        hostile_literals = (
+            '{"card_volume":1e-999999}',
+            '{"effective_rate":1e999999}',
+            '{"transaction_count":' + ("9" * 5000) + "}",
+        )
+        for source in hostile_literals:
+            with self.subTest(source_length=len(source)):
+                with self.assertRaisesRegex(ValueError, "number_range"):
+                    self.validator.loads_record(source)
+
+        direct_record = self.mutated(
+            lambda row: row.update({"card_volume": Decimal("1e-999999")})
+        )
+        self.assertIn("number_range", self.issue_codes(direct_record))
+
+    def test_direct_nonfinite_and_extreme_numbers_are_safe_rejections(self):
+        hostile_values = (
+            Decimal("Infinity"),
+            Decimal("NaN"),
+            Decimal("1e999999"),
+            float("inf"),
+            float("nan"),
+            10**32,
+            10**5000,
+        )
+        for value in hostile_values:
+            with self.subTest(value_type=type(value).__name__):
+                record = self.mutated(
+                    lambda row, hostile=value: row.update({"card_volume": hostile})
+                )
+                self.assertIn("number_range", self.issue_codes(record))
 
     def test_oversized_and_deeply_nested_inputs_fail_closed(self):
         oversized = '{"review_notes":["' + ("x" * 1_000_000) + '"]}'
@@ -194,6 +237,15 @@ class AuditValidatorTests(unittest.TestCase):
         rendered = json.dumps(report, sort_keys=True)
         self.assertNotIn(sensitive, rendered)
         self.assertEqual("invalid", report["status"])
+
+    def test_unknown_field_names_never_leak_through_issue_paths(self):
+        sensitive_key = "password_SUPERSECRET_12345"
+        record = {sensitive_key: Decimal("1e999999")}
+        rendered = json.dumps(
+            self.validator.validation_result(record), sort_keys=True
+        )
+        self.assertNotIn(sensitive_key, rendered)
+        self.assertIn("/_unknown", rendered)
 
     def test_csv_header_matches_the_documented_flat_contract(self):
         issues = self.validator.validate_csv_template(
@@ -242,6 +294,59 @@ class AuditValidatorTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertEqual("invalid", report["status"])
         self.assertNotIn("4111", result.stdout)
+
+    def test_cli_uses_a_stable_value_free_code_for_unreadable_input(self):
+        marker = "private-merchant-statement-do-not-echo.json"
+        result = subprocess.run(
+            [sys.executable, str(VALIDATOR_PATH), "--json", str(ROOT / marker)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(1, result.returncode)
+        report = json.loads(result.stdout)
+        self.assertEqual("input_read", report["issues"][0]["code"])
+        self.assertNotIn(marker, result.stdout)
+
+    def test_corpus_reports_a_missing_vector_without_throwing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            (candidate / "test-vectors/invalid/wrong-effective-rate.json").unlink()
+
+            report = self.validator.build_corpus_report(candidate)
+            self.assertEqual("fail", report["status"])
+            self.assertGreaterEqual(report["unexpected_results"], 1)
+
+    def test_corpus_rejects_a_missing_registered_valid_vector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            (candidate / "test-vectors/valid/standard-month.json").unlink()
+
+            report = self.validator.build_corpus_report(candidate)
+            self.assertEqual("fail", report["status"])
+            self.assertIn(
+                {"file": "valid-corpus", "result": "inventory_mismatch"},
+                report["unexpected"],
+            )
+
+    def test_corpus_rejects_an_unregistered_invalid_vector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            shutil.copyfile(
+                candidate / "test-vectors/valid/standard-month.json",
+                candidate / "test-vectors/invalid/unregistered.json",
+            )
+
+            report = self.validator.build_corpus_report(candidate)
+            self.assertEqual("fail", report["status"])
+            self.assertIn(
+                {"file": "invalid-corpus", "result": "inventory_mismatch"},
+                report["unexpected"],
+            )
 
 
 if __name__ == "__main__":

@@ -10,7 +10,15 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import (
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+    ROUND_HALF_UP,
+    localcontext,
+)
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,7 +28,7 @@ from jsonschema import Draft202012Validator, FormatChecker, validators
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema/payment-statement-audit.schema.json"
-VALIDATOR_VERSION = "1.1.0"
+VALIDATOR_VERSION = "1.1.1"
 VALIDATION_DEPENDENCIES = (
     "attrs",
     "jsonschema",
@@ -31,8 +39,12 @@ VALIDATION_DEPENDENCIES = (
 MAX_PERIOD_DAYS = 62
 MAX_INPUT_BYTES = 1_000_000
 MAX_INPUT_DEPTH = 32
+MAX_NUMBER_DIGITS = 32
+MAX_NUMBER_ABS_EXPONENT = 18
+MAX_NUMBER_TOKEN_CHARS = 64
 MONEY_QUANTUM = Decimal("0.01")
 RATE_QUANTUM = Decimal("0.000001")
+MONEY_MAXIMUM = Decimal("999999999999.99")
 FEE_CATEGORIES = (
     "interchange",
     "assessments",
@@ -44,6 +56,27 @@ FEE_CATEGORIES = (
     "chargebacks",
     "other",
 )
+SAFE_PATH_KEYS = {
+    "amount",
+    "average_ticket",
+    "calculation_basis",
+    "card_volume",
+    "category",
+    "currency",
+    "effective_rate",
+    "end",
+    "fee_groups",
+    "gross_processing_fees",
+    "notes",
+    "pricing_model",
+    "review_notes",
+    "schema_version",
+    "start",
+    "statement_credits",
+    "statement_period",
+    "total_processing_fees",
+    "transaction_count",
+}
 CSV_HEADER = (
     "schema_version",
     "calculation_basis",
@@ -102,6 +135,50 @@ def _reject_constant(_: str) -> None:
     raise ValueError("non_finite_number: JSON numbers must be finite")
 
 
+def _number_is_safe(value: int | float | Decimal) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        # Compare numerically instead of converting hostile giant integers to
+        # text, which Python deliberately limits.
+        return abs(value) < 10**MAX_NUMBER_DIGITS
+    try:
+        number = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return False
+    if not number.is_finite():
+        return False
+    sign, digits, exponent = number.as_tuple()
+    del sign
+    return (
+        len(digits) <= MAX_NUMBER_DIGITS
+        and abs(exponent) <= MAX_NUMBER_ABS_EXPONENT
+        and abs(number.adjusted()) <= MAX_NUMBER_ABS_EXPONENT
+    )
+
+
+def _safe_decimal_literal(source: str) -> Decimal:
+    if len(source) > MAX_NUMBER_TOKEN_CHARS:
+        raise ValueError("number_range: JSON number is outside safe limits")
+    try:
+        number = Decimal(source)
+    except InvalidOperation as exc:
+        raise ValueError("number_range: JSON number is outside safe limits") from exc
+    if not _number_is_safe(number):
+        raise ValueError("number_range: JSON number is outside safe limits")
+    return number
+
+
+def _safe_int_literal(source: str) -> int:
+    digits = source.removeprefix("-")
+    if len(digits) > MAX_NUMBER_DIGITS:
+        raise ValueError("number_range: JSON number is outside safe limits")
+    number = int(source)
+    if not _number_is_safe(number):
+        raise ValueError("number_range: JSON number is outside safe limits")
+    return number
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -117,8 +194,8 @@ def loads_record(source: str) -> dict[str, Any]:
     try:
         result = json.loads(
             source,
-            parse_float=Decimal,
-            parse_int=int,
+            parse_float=_safe_decimal_literal,
+            parse_int=_safe_int_literal,
             parse_constant=_reject_constant,
             object_pairs_hook=_unique_object,
         )
@@ -162,7 +239,15 @@ def _schema_validator() -> Draft202012Validator:
 
 
 def _pointer(parts: Iterable[Any]) -> str:
-    encoded = [str(part).replace("~", "~0").replace("/", "~1") for part in parts]
+    encoded = []
+    for part in parts:
+        if isinstance(part, int):
+            segment = str(part)
+        elif isinstance(part, str) and part in SAFE_PATH_KEYS:
+            segment = part
+        else:
+            segment = "_unknown"
+        encoded.append(segment.replace("~", "~0").replace("/", "~1"))
     return "/" + "/".join(encoded) if encoded else "/"
 
 
@@ -190,7 +275,41 @@ def _decimal(value: Any) -> Decimal | None:
         result = value if isinstance(value, Decimal) else Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
-    return result if result.is_finite() else None
+    return result if _number_is_safe(result) else None
+
+
+def _money_decimal(value: Any) -> Decimal | None:
+    number = _decimal(value)
+    if (
+        number is None
+        or number < 0
+        or number > MONEY_MAXIMUM
+        or number.as_tuple().exponent < -2
+    ):
+        return None
+    return number
+
+
+def _numeric_safety_issues(
+    value: Any, path: tuple[Any, ...] = ()
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            issues.extend(_numeric_safety_issues(child, (*path, key)))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            issues.extend(_numeric_safety_issues(child, (*path, index)))
+    elif isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        if not _number_is_safe(value):
+            issues.append(
+                ValidationIssue(
+                    "number_range",
+                    _pointer(path),
+                    "A number exceeds the validator's safe magnitude or precision limits.",
+                )
+            )
+    return issues
 
 
 def _has_scale(value: Any, places: int) -> bool:
@@ -332,11 +451,11 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
                 )
             )
         amounts = [
-            _decimal(group.get("amount"))
+            _money_decimal(group.get("amount"))
             for group in groups
             if isinstance(group, dict)
         ]
-        gross = _decimal(record.get("gross_processing_fees"))
+        gross = _money_decimal(record.get("gross_processing_fees"))
         if gross is not None and amounts and all(amount is not None for amount in amounts):
             if sum((amount for amount in amounts if amount is not None), Decimal("0")) != gross:
                 issues.append(
@@ -347,9 +466,9 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
                     )
                 )
 
-    gross = _decimal(record.get("gross_processing_fees"))
-    credits = _decimal(record.get("statement_credits"))
-    net = _decimal(record.get("total_processing_fees"))
+    gross = _money_decimal(record.get("gross_processing_fees"))
+    credits = _money_decimal(record.get("statement_credits"))
+    net = _money_decimal(record.get("total_processing_fees"))
     if gross is not None and credits is not None and net is not None:
         if gross - credits != net:
             issues.append(
@@ -360,7 +479,7 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
                 )
             )
 
-    volume = _decimal(record.get("card_volume"))
+    volume = _money_decimal(record.get("card_volume"))
     count = record.get("transaction_count")
     count_is_integer = isinstance(count, int) and not isinstance(count, bool)
     if volume is not None and count_is_integer:
@@ -422,8 +541,23 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
 
 
 def validate_record(record: dict[str, Any]) -> list[ValidationIssue]:
-    issues = _schema_issues(record)
-    issues.extend(_semantic_issues(record))
+    issues = _numeric_safety_issues(record)
+    # jsonschema is not required to handle non-finite or million-exponent
+    # Decimal instances supplied directly by Python callers. Reject those
+    # before schema comparison or arithmetic can stringify or operate on them.
+    if not issues:
+        issues.extend(_schema_issues(record))
+        # Do not inherit a host application's Decimal precision. Fifty digits
+        # safely covers every bounded amount and derived value in this model.
+        arithmetic_context = Context(
+            prec=50,
+            rounding=ROUND_HALF_UP,
+            Emin=-999999,
+            Emax=999999,
+            traps=[InvalidOperation, DivisionByZero, Overflow],
+        )
+        with localcontext(arithmetic_context):
+            issues.extend(_semantic_issues(record))
     issues.extend(_privacy_issues(record))
     return sorted(set(issues))
 
@@ -516,9 +650,20 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
     root = Path(root)
     manifest_path = root / "test-vectors/manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    valid_expectations = manifest.get("valid", [])
     valid_files = sorted((root / "test-vectors/valid").glob("*.json"))
     invalid_expectations = manifest.get("invalid", {})
     unexpected: list[dict[str, str]] = []
+
+    valid_names = {path.name for path in valid_files}
+    valid_inventory = (
+        isinstance(valid_expectations, list)
+        and all(isinstance(name, str) for name in valid_expectations)
+        and len(valid_expectations) == len(set(valid_expectations))
+        and valid_names == set(valid_expectations)
+    )
+    if not valid_inventory:
+        unexpected.append({"file": "valid-corpus", "result": "inventory_mismatch"})
 
     for path in valid_files:
         try:
@@ -529,11 +674,16 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
             unexpected.append({"file": path.name, "result": "unexpected_invalid"})
 
     invalid_dir = root / "test-vectors/invalid"
+    invalid_files = {path.name for path in invalid_dir.glob("*.json")}
+    if invalid_files != set(invalid_expectations):
+        unexpected.append(
+            {"file": "invalid-corpus", "result": "inventory_mismatch"}
+        )
     for filename, expected_codes in sorted(invalid_expectations.items()):
         path = invalid_dir / filename
         try:
             observed = {issue.code for issue in validate_record(load_record(path))}
-        except ValueError as exc:
+        except (OSError, UnicodeError, ValueError) as exc:
             observed = {str(exc).split(":", maxsplit=1)[0]}
         if not set(expected_codes).issubset(observed):
             unexpected.append({"file": filename, "result": "expected_rule_not_observed"})
@@ -561,7 +711,7 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate a v1.1.0 Lifted Payments statement-audit JSON record."
+        description="Validate a schema v1.1.0 Lifted Payments statement-audit JSON record."
     )
     parser.add_argument("path", nargs="?", type=Path)
     parser.add_argument("--json", action="store_true", dest="as_json")
@@ -580,7 +730,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = validation_result(load_record(args.path))
     except (OSError, UnicodeError, ValueError) as exc:
-        code = str(exc).split(":", maxsplit=1)[0]
+        if isinstance(exc, (OSError, UnicodeError)):
+            code = "input_read"
+        else:
+            candidate = str(exc).split(":", maxsplit=1)[0]
+            code = candidate if candidate in {
+                "duplicate_key",
+                "input_depth",
+                "input_size",
+                "invalid_json",
+                "invalid_root",
+                "non_finite_number",
+                "number_range",
+            } else "invalid_json"
         report = {
             "validator_version": VALIDATOR_VERSION,
             "status": "invalid",
@@ -596,7 +758,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.as_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     elif report["status"] == "valid":
-        print("VALID: record satisfies the v1.1.0 structural, accounting, and privacy rules.")
+        print("VALID: record satisfies the schema v1.1.0 structural, accounting, and privacy rules.")
     else:
         print(f"INVALID: {report['issue_count']} rule violation(s).")
         for issue in report["issues"]:
