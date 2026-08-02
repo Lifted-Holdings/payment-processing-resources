@@ -22,6 +22,40 @@ RELEASE_URL = (
 )
 HUGGING_FACE_REPO_ID = "Liftedholdings/payment-statement-audit-model"
 KAGGLE_DATASET_ID = "liftedpayments/payment-statement-audit-model"
+RUNTIME_ONLY_DIRECTORIES = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "venv",
+}
+
+
+def git_metadata_is_available():
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError:
+        return False
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def portable_release_inventory():
+    files = set()
+    for path in ROOT.rglob("*"):
+        relative = path.relative_to(ROOT)
+        if any(part in RUNTIME_ONLY_DIRECTORIES for part in relative.parts):
+            continue
+        if path.is_file() or path.is_symlink():
+            files.add(relative.as_posix())
+    return files
 
 
 class ReleaseAssetTests(unittest.TestCase):
@@ -126,23 +160,28 @@ class ReleaseAssetTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
         )
-        result = subprocess.run(
-            [
-                "git",
-                "ls-files",
-                "--cached",
-                "--others",
-                "--exclude-standard",
-            ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        repository_files = {
-            line.replace("\\", "/") for line in result.stdout.splitlines() if line
-        }
+        if git_metadata_is_available():
+            result = subprocess.run(
+                [
+                    "git",
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            repository_files = {
+                line.replace("\\", "/")
+                for line in result.stdout.splitlines()
+                if line
+            }
+        else:
+            repository_files = portable_release_inventory()
         self.assertEqual(repository_files, set(manifest["files"]))
 
     def test_release_files_are_pinned_to_lf_by_git(self):
@@ -150,20 +189,25 @@ class ReleaseAssetTests(unittest.TestCase):
             (ROOT / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
         )
         release_files = manifest["files"]
-        result = subprocess.run(
-            ["git", "check-attr", "eol", "--", *release_files],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
+        if git_metadata_is_available():
+            result = subprocess.run(
+                ["git", "check-attr", "eol", "--", *release_files],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
 
-        observed = {
-            line.split(": ", maxsplit=2)[0]: line.split(": ", maxsplit=2)[2]
-            for line in result.stdout.splitlines()
-        }
-        self.assertEqual(observed, {filename: "lf" for filename in release_files})
+            observed = {
+                line.split(": ", maxsplit=2)[0]: line.split(": ", maxsplit=2)[2]
+                for line in result.stdout.splitlines()
+            }
+            self.assertEqual(observed, {filename: "lf" for filename in release_files})
+        else:
+            for filename in release_files:
+                with self.subTest(filename=filename):
+                    self.assertNotIn(b"\r\n", (ROOT / filename).read_bytes())
 
     def test_readme_presents_the_versioned_release_and_canonical_citation(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
