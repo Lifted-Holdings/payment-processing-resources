@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +35,7 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_release_manifest_has_one_explicit_versioned_identity(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("1.1.2", manifest["version"])
+        self.assertEqual("1.1.3", manifest["version"])
         self.assertEqual("1.1.0", manifest["schema_version"])
         self.assertEqual(
             "10.5281/zenodo.21761714", manifest["concept_doi"]
@@ -42,13 +44,14 @@ class PublicationGateTests(unittest.TestCase):
             "https://liftedpayments.com/payment-processing-statement-audit/",
             manifest["canonical_url"],
         )
-        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.2"))
+        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.3"))
         self.assertEqual(len(manifest["files"]), len(set(manifest["files"])))
         self.assertGreaterEqual(len(manifest["files"]), 20)
 
     def test_gate_is_fail_closed_until_every_release_condition_is_satisfied(self):
         report = self.gate.build_publication_report(ROOT)
-        self.assertIn(report["status"], {"blocked", "ready"})
+        self.assertIn(report["status"], {"blocked", "valid", "ready", "verified"})
+        self.assertEqual("candidate", report["mode"])
         self.assertEqual(report["check_count"], len(report["checks"]))
         self.assertEqual(
             report["failed_check_count"],
@@ -57,7 +60,9 @@ class PublicationGateTests(unittest.TestCase):
         self.assertIn("corpus_validation", {check["code"] for check in report["checks"]})
         self.assertIn("dependency_lock", {check["code"] for check in report["checks"]})
         self.assertIn("utf8_text_assets", {check["code"] for check in report["checks"]})
-        self.assertIn("immutable_tag_match", {check["code"] for check in report["checks"]})
+        self.assertIn(
+            "repository_provenance", {check["code"] for check in report["checks"]}
+        )
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         if manifest["version_doi"] is None:
             self.assertEqual("blocked", report["status"])
@@ -65,6 +70,112 @@ class PublicationGateTests(unittest.TestCase):
                 "version_doi_declared",
                 {check["code"] for check in report["checks"] if check["status"] == "fail"},
             )
+
+    def test_tagless_tree_is_blocked_in_default_candidate_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
+
+            report = self.gate.build_publication_report(candidate)
+
+        checks = {check["code"]: check["status"] for check in report["checks"]}
+        self.assertEqual("candidate", report["mode"])
+        self.assertEqual("blocked", report["status"])
+        self.assertEqual("fail", checks["repository_provenance"])
+
+    def test_tagless_tree_can_be_package_valid_but_never_publication_ready(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
+
+            report = self.gate.build_publication_report(candidate, mode="package")
+
+        self.assertEqual("package", report["mode"])
+        self.assertEqual("valid", report["status"])
+        self.assertNotIn(
+            "repository_provenance", {check["code"] for check in report["checks"]}
+        )
+
+    def test_provenance_failure_prevents_candidate_validator_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
+            validator = candidate / "tools/validate_audit.py"
+            validator.write_text(
+                "from pathlib import Path\n"
+                "Path('candidate-validator-executed.marker').write_text('executed')\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [sys.executable, "tools/update_checksums.py", "--write"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            report = self.gate.build_publication_report(candidate)
+
+            self.assertEqual("blocked", report["status"])
+            self.assertFalse((candidate / "candidate-validator-executed.marker").exists())
+
+    def test_cli_package_mode_uses_package_validity_language(self):
+        result = subprocess.run(
+            [sys.executable, str(GATE_PATH), "--mode", "package", "--json"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        report = json.loads(result.stdout)
+        self.assertEqual("package", report["mode"])
+        self.assertEqual("valid", report["status"])
+        self.assertEqual(0, result.returncode)
+
+    def test_published_mode_requires_and_reports_external_attestation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
+            with mock.patch.object(
+                self.gate,
+                "inspect_repository",
+                return_value=SimpleNamespace(
+                    publication_ready=True, head_commit="a" * 40
+                ),
+            ), mock.patch.object(
+                self.gate,
+                "attest_public_release",
+                return_value=SimpleNamespace(verified=True),
+            ) as attestor:
+                report = self.gate.build_publication_report(candidate, mode="published")
+
+        checks = {check["code"]: check["status"] for check in report["checks"]}
+        self.assertEqual("verified", report["status"])
+        self.assertEqual("pass", checks["public_release_attestation"])
+        attestor.assert_called_once()
+
+    def test_published_mode_blocks_when_external_attestation_disagrees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
+            with mock.patch.object(
+                self.gate,
+                "inspect_repository",
+                return_value=SimpleNamespace(
+                    publication_ready=True, head_commit="a" * 40
+                ),
+            ), mock.patch.object(
+                self.gate,
+                "attest_public_release",
+                return_value=SimpleNamespace(verified=False),
+            ):
+                report = self.gate.build_publication_report(candidate, mode="published")
+
+        checks = {check["code"]: check["status"] for check in report["checks"]}
+        self.assertEqual("blocked", report["status"])
+        self.assertEqual("fail", checks["public_release_attestation"])
 
     def test_gate_report_contains_hashes_and_no_file_contents(self):
         report = self.gate.build_publication_report(ROOT)
@@ -139,20 +250,31 @@ class PublicationGateTests(unittest.TestCase):
             self.assertEqual("blocked", report["status"])
 
     def test_gate_requires_every_security_critical_release_asset(self):
-        with tempfile.TemporaryDirectory() as directory:
-            candidate = Path(directory) / "release"
-            shutil.copytree(ROOT, candidate)
-            manifest_path = candidate / "RELEASE-MANIFEST.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["files"].remove("tools/publication_gate.py")
-            manifest_path.write_text(
-                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-            )
+        critical_assets = (
+            "tools/public_release_attestation.py",
+            "tools/publication_gate.py",
+            "tools/release_provenance.py",
+            "tests/test_public_release_attestation.py",
+            "tests/test_release_provenance.py",
+        )
+        for critical_asset in critical_assets:
+            with self.subTest(critical_asset=critical_asset):
+                with tempfile.TemporaryDirectory() as directory:
+                    candidate = Path(directory) / "release"
+                    shutil.copytree(ROOT, candidate)
+                    manifest_path = candidate / "RELEASE-MANIFEST.json"
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest["files"].remove(critical_asset)
+                    manifest_path.write_text(
+                        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+                    )
 
-            report = self.gate.build_publication_report(candidate)
-            checks = {check["code"]: check["status"] for check in report["checks"]}
-            self.assertEqual("fail", checks["required_release_assets"])
-            self.assertEqual("blocked", report["status"])
+                    report = self.gate.build_publication_report(candidate)
+                    checks = {
+                        check["code"]: check["status"] for check in report["checks"]
+                    }
+                    self.assertEqual("fail", checks["required_release_assets"])
+                    self.assertEqual("blocked", report["status"])
 
     def test_gate_blocks_an_undeclared_regular_file_in_the_release_tree(self):
         with tempfile.TemporaryDirectory() as directory:

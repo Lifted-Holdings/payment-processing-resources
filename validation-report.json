@@ -14,6 +14,6 @@
   "unexpected": [],
   "unexpected_results": 0,
   "valid_vectors": 2,
-  "validator_sha256": "e3fb1c8b76bf4be204d4ea7d2cbd72f2f0903a09646b89154c4302605bd71d35",
-  "validator_version": "1.1.2"
+  "validator_sha256": "0fede54b398f6f58d7152592f47991855724b0af8d260e5a8bce000fb05be4cc",
+  "validator_version": "1.1.3"
 }

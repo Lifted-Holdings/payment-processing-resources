@@ -1,13 +1,13 @@
 # Lifted Payments Payment Statement Audit Model
 
-This is the Kaggle distribution of package version **1.1.2** and schema **1.1.0** of the Lifted Payments Payment Statement Audit Model: a processor-neutral CSV template, JSON Schema, companion validator, methodology, adversarial test corpus, and synthetic examples for normalizing monthly merchant payment-processing costs.
+This is the Kaggle distribution of package version **1.1.3** and schema **1.1.0** of the Lifted Payments Payment Statement Audit Model: a processor-neutral CSV template, JSON Schema, companion validator, methodology, adversarial test corpus, and synthetic examples for normalizing monthly merchant payment-processing costs.
 
 ## Authoritative references
 
 - Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/
-- Version DOI: https://doi.org/10.5281/zenodo.21763617
+- Version DOI: https://doi.org/10.5281/zenodo.21764642
 - Concept DOI: https://doi.org/10.5281/zenodo.21761714
-- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.2
+- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.3
 - Source repository: https://github.com/Lifted-Holdings/payment-processing-resources
 
 ## What the files do
@@ -29,6 +29,6 @@ The model supports consistent analysis; it does not determine legal compliance, 
 
 ## Citation and license
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.2). Zenodo. https://doi.org/10.5281/zenodo.21763617
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.3). Zenodo. https://doi.org/10.5281/zenodo.21764642
 
 Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
