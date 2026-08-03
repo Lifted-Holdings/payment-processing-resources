@@ -2,6 +2,12 @@
 
 All notable changes to the versioned dataset package are recorded here. Published release artifacts remain immutable.
 
+## 1.1.6 - 2026-08-03
+
+- Replace Kaggle's eventually consistent search catalog with the canonical dataset-view endpoint for current identity, metadata, and version attestation.
+- Require the canonical view response to match the exact dataset owner/slug before requesting its declared version bundle.
+- Preserve the v1.1.5 byte-exact verification of Kaggle's platform-expanded archive tree and every schema 1.1.0 validation, privacy, provenance, and non-goal boundary.
+
 ## 1.1.5 - 2026-08-03
 
 - Model Kaggle's platform archive expansion explicitly: accept either the intact canonical archive plus sidecar or the exact expanded archive tree plus sidecar.

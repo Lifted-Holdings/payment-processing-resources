@@ -3,9 +3,9 @@
 This public repository contains a processor-neutral payment processing statement audit model from Lifted Payments.
 
 Canonical guide: https://liftedpayments.com/payment-processing-statement-audit/
-Version DOI: https://doi.org/10.5281/zenodo.21765625
+Version DOI: https://doi.org/10.5281/zenodo.21765732
 Concept DOI: https://doi.org/10.5281/zenodo.21761714
-Versioned release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.5
+Versioned release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.6
 Organization: https://liftedpayments.com/
 Merchant application: https://liftedholdings.com/apply
 License: CC BY 4.0
@@ -21,6 +21,6 @@ Files:
 - SECURITY.md: publication threat model, trust boundaries, and private reporting path.
 - CITATION.cff: citation metadata.
 
-Package 1.1.5 validates schema 1.1.0 records using gross settled purchase volume and net processing fees. Gross fee groups reconcile exactly; processing-fee credits are separate. Effective rate equals net processing fees divided by gross settled purchase volume, rounded half up to six decimal places. Store it as a decimal and multiply by 100 only for percentage display.
+Package 1.1.6 validates schema 1.1.0 records using gross settled purchase volume and net processing fees. Gross fee groups reconcile exactly; processing-fee credits are separate. Effective rate equals net processing fees divided by gross settled purchase volume, rounded half up to six decimal places. Store it as a decimal and multiply by 100 only for percentage display.
 
 Never add card numbers, bank details, credentials, tax IDs, owner Social Security numbers, or real merchant statements to this public repository.
