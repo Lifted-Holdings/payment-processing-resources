@@ -1,7 +1,7 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
   "subtitle": "A processor-neutral merchant statement-audit model with reproducible validation",
-  "description": "Version 1.1.4 of the Lifted Payments processor-neutral model for normalizing merchant payment-processing statement totals. This Kaggle version contains the exact immutable release archive and SHA-256 sidecar. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: 10.5281/zenodo.21765280 . Versioned source: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.4 . Release archive SHA-256: {{RELEASE_ARCHIVE_SHA256}} . The package contains only synthetic data and no real merchant or cardholder data.",
+  "description": "Version 1.1.5 of the Lifted Payments processor-neutral model for normalizing merchant payment-processing statement totals. Kaggle expands the immutable release archive for browsing; the published gate verifies every expanded path and byte against the canonical archive and verifies the SHA-256 sidecar exactly. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: 10.5281/zenodo.21765625 . Versioned source: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.5 . Release archive SHA-256: {{RELEASE_ARCHIVE_SHA256}} . The package contains only synthetic data and no real merchant or cardholder data.",
   "id": "liftedpayments/payment-statement-audit-model",
   "licenses": [
     {
@@ -10,7 +10,7 @@
   ],
   "resources": [
     {
-      "path": "lifted-payments-statement-audit-model-v1.1.4.zip",
+      "path": "lifted-payments-statement-audit-model-v1.1.5.zip",
       "description": "Byte-reproducible immutable release archive."
     },
     {
@@ -22,5 +22,7 @@
     "finance",
     "business",
     "data analysis"
-  ]
+  ],
+  "expectedUpdateFrequency": "not specified",
+  "userSpecifiedSources": "Original synthetic dataset and open-source reference validator authored by Lifted Payments. Source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.5 . Archival record: https://doi.org/10.5281/zenodo.21765625 ."
 }

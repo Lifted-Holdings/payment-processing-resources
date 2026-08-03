@@ -74,12 +74,12 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
         self.manifest = {
             "title": TITLE,
-            "version": "1.1.4",
+            "version": "1.1.5",
             "release_date": "2026-08-02",
             "version_doi": "10.5281/zenodo.99999999",
             "concept_doi": "10.5281/zenodo.21761714",
             "canonical_url": CANONICAL_URL,
-            "source_release": f"{SOURCE_REPOSITORY}/releases/tag/v1.1.4",
+            "source_release": f"{SOURCE_REPOSITORY}/releases/tag/v1.1.5",
             "license": "CC-BY-4.0",
             "files": ["README.md"],
         }
@@ -93,21 +93,21 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for name, value in members.items():
-                archive.writestr(f"payment-processing-resources-1.1.4/{name}", value)
+                archive.writestr(f"payment-processing-resources-1.1.5/{name}", value)
         return output.getvalue()
 
     def make_transport(self, archive=None):
         archive = archive or self.make_zip()
         digest = hashlib.sha256(archive).hexdigest()
-        zip_name = "lifted-payments-statement-audit-model-v1.1.4.zip"
+        zip_name = "lifted-payments-statement-audit-model-v1.1.5.zip"
         sidecar_name = "release-archive.sha256"
         github_zip = (
             f"https://github.com/Lifted-Holdings/payment-processing-resources/"
-            f"releases/download/v1.1.4/{zip_name}"
+            f"releases/download/v1.1.5/{zip_name}"
         )
         github_sidecar = (
             "https://github.com/Lifted-Holdings/payment-processing-resources/"
-            f"releases/download/v1.1.4/{sidecar_name}"
+            f"releases/download/v1.1.5/{sidecar_name}"
         )
         zenodo_zip = (
             f"https://zenodo.org/api/records/99999999/files/{zip_name}/content"
@@ -136,11 +136,18 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         with zipfile.ZipFile(
             kaggle_bundle_buffer, "w", compression=zipfile.ZIP_STORED
         ) as kaggle_bundle:
-            kaggle_bundle.writestr(zip_name, archive)
             kaggle_bundle.writestr(sidecar_name, sidecar)
+            with zipfile.ZipFile(io.BytesIO(archive)) as release_archive:
+                for member in release_archive.infolist():
+                    if member.is_dir():
+                        continue
+                    kaggle_bundle.writestr(
+                        f"{zip_name.removesuffix('.zip')}/{member.filename}",
+                        release_archive.read(member),
+                    )
         kaggle_bundle = kaggle_bundle_buffer.getvalue()
         github = {
-            "tag_name": "v1.1.4",
+            "tag_name": "v1.1.5",
             "draft": False,
             "prerelease": False,
             "html_url": self.manifest["source_release"],
@@ -166,7 +173,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
             "metadata": {
                 "title": TITLE,
                 "publication_date": "2026-08-02",
-                "version": "1.1.4",
+                "version": "1.1.5",
                 "license": {"id": "cc-by-4.0"},
                 "related_identifiers": [
                     {"identifier": CANONICAL_URL, "relation": "isDocumentedBy"},
@@ -219,7 +226,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
         transport = FakeTransport(
             json_values={
-                "https://api.github.com/repos/Lifted-Holdings/payment-processing-resources/releases/tags/v1.1.4": github,
+                "https://api.github.com/repos/Lifted-Holdings/payment-processing-resources/releases/tags/v1.1.5": github,
                 "https://zenodo.org/api/records/99999999": zenodo,
                 "https://huggingface.co/api/datasets/Liftedholdings/payment-statement-audit-model": huggingface,
                 kaggle_list: [
@@ -231,7 +238,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                         "isPrivate": False,
                         "currentVersionNumber": kaggle_version,
                         "description": (
-                            "Version 1.1.4. "
+                            "Version 1.1.5. "
                             f"{self.manifest['version_doi']} "
                             f"{self.manifest['source_release']} "
                             f"{digest}"
@@ -250,7 +257,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                             "target": expected_commit,
                             "target_type": "revision",
                         },
-                        "refs/tags/v1.1.4": {
+                        "refs/tags/v1.1.5": {
                             "target": release_id,
                             "target_type": "release",
                         },
@@ -258,7 +265,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 },
                 software_heritage_release: {
                     "id": release_id,
-                    "name": "v1.1.4",
+                    "name": "v1.1.5",
                     "target": expected_commit,
                     "target_type": "revision",
                 },
@@ -351,7 +358,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 self.assertIn(expected_failure, result.failure_codes)
 
     def test_corrupt_deflated_kaggle_bundle_fails_closed(self):
-        zip_name = "lifted-payments-statement-audit-model-v1.1.4.zip"
+        zip_name = "lifted-payments-statement-audit-model-v1.1.5.zip"
         sidecar_name = "release-archive.sha256"
         archive = self.make_zip()
         sidecar = b"0" * 64 + b"  " + zip_name.encode() + b"\n"
@@ -370,6 +377,66 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 bytes(corrupted), archive, sidecar, zip_name, sidecar_name
             )
         )
+
+    def test_intact_kaggle_archive_and_sidecar_are_accepted(self):
+        zip_name = "lifted-payments-statement-audit-model-v1.1.5.zip"
+        sidecar_name = "release-archive.sha256"
+        archive = self.make_zip()
+        sidecar = f"{hashlib.sha256(archive).hexdigest()}  {zip_name}\n".encode()
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as bundle:
+            bundle.writestr(zip_name, archive)
+            bundle.writestr(sidecar_name, sidecar)
+
+        self.assertTrue(
+            self.attestation._kaggle_bundle_matches(
+                output.getvalue(), archive, sidecar, zip_name, sidecar_name
+            )
+        )
+
+    def test_kaggle_platform_expansion_rejects_tree_drift(self):
+        zip_name = "lifted-payments-statement-audit-model-v1.1.5.zip"
+        sidecar_name = "release-archive.sha256"
+        archive = self.make_zip()
+        sidecar = f"{hashlib.sha256(archive).hexdigest()}  {zip_name}\n".encode()
+        prefix = zip_name.removesuffix(".zip") + "/"
+        with zipfile.ZipFile(io.BytesIO(archive)) as release:
+            expanded = {
+                prefix + info.filename: release.read(info)
+                for info in release.infolist()
+                if not info.is_dir()
+            }
+        expanded[sidecar_name] = sidecar
+        first_release_name = next(name for name in expanded if name != sidecar_name)
+        cases = {
+            "extra": {**expanded, prefix + "unexpected.txt": b"unexpected"},
+            "missing": {
+                name: value
+                for name, value in expanded.items()
+                if name != first_release_name
+            },
+            "changed": {**expanded, first_release_name: b"changed"},
+            "case_alias": {
+                **expanded,
+                first_release_name.upper(): expanded[first_release_name],
+            },
+            "traversal": {**expanded, prefix + "../outside.txt": b"outside"},
+            "backslash": {**expanded, prefix + "bad\\path.txt": b"bad"},
+            "directory": {**expanded, prefix + "unexpected/": b""},
+        }
+        for label, members in cases.items():
+            with self.subTest(label=label):
+                output = io.BytesIO()
+                with zipfile.ZipFile(
+                    output, "w", compression=zipfile.ZIP_DEFLATED
+                ) as bundle:
+                    for name, value in members.items():
+                        bundle.writestr(name, value)
+                self.assertFalse(
+                    self.attestation._kaggle_bundle_matches(
+                        output.getvalue(), archive, sidecar, zip_name, sidecar_name
+                    )
+                )
 
     def test_digest_mismatch_blocks_attestation(self):
         transport, _, expected_commit, _ = self.make_transport()

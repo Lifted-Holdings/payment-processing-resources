@@ -1,6 +1,6 @@
 # Open payment processing resources
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21765280.svg)](https://doi.org/10.5281/zenodo.21765280)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21765625.svg)](https://doi.org/10.5281/zenodo.21765625)
 
 Processor-neutral templates and machine-readable resources from [Lifted Payments](https://liftedpayments.com/) for auditing merchant processing statements.
 
@@ -29,9 +29,9 @@ Read the full, maintained guide at **[liftedpayments.com/payment-processing-stat
 
 ## Versioned release
 
-**v1.1.4 — August 3, 2026** is the reproducible, adversarially hardened release candidate. It preserves the schema 1.1.0 record contract while making release archives byte-reproducible, adding exact Kaggle mirror attestation, and rejecting stale mirrors, truncated-card references, and display-control spoofing. Candidate publication still requires a clean committed tree, authoritative remote-tag state, and monotonic version. Published attestation compares GitHub, Zenodo, DOI, Hugging Face, Kaggle, and Software Heritage identities and bytes without executing downloaded code. Prior release files remain immutable.
+**v1.1.5 — August 3, 2026** is the reproducible, adversarially hardened release candidate. It preserves the schema 1.1.0 record contract while making release archives byte-reproducible, verifying either an intact Kaggle archive or Kaggle's platform-expanded tree byte-for-byte, and rejecting stale mirrors, unexpected transformed paths, truncated-card references, and display-control spoofing. Candidate publication still requires a clean committed tree, authoritative remote-tag state, and monotonic version. Published attestation compares GitHub, Zenodo, DOI, Hugging Face, Kaggle, and Software Heritage identities and bytes without executing downloaded code. Prior release files remain immutable.
 
-The reserved version DOI is **[doi:10.5281/zenodo.21765280](https://doi.org/10.5281/zenodo.21765280)**; the all-versions concept DOI is **[doi:10.5281/zenodo.21761714](https://doi.org/10.5281/zenodo.21761714)**; and the source release target is **[GitHub v1.1.4](https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.4)**. The DOI is registered only when the Zenodo draft is published. The release is described for citation systems in [`CITATION.cff`](./CITATION.cff), for research archives in [`.zenodo.json`](./.zenodo.json), and for machine agents in [`codemeta.json`](./codemeta.json). Use [`checksums.txt`](./checksums.txt) to verify every release file before analysis.
+The reserved version DOI is **[doi:10.5281/zenodo.21765625](https://doi.org/10.5281/zenodo.21765625)**; the all-versions concept DOI is **[doi:10.5281/zenodo.21761714](https://doi.org/10.5281/zenodo.21761714)**; and the source release target is **[GitHub v1.1.5](https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.5)**. The DOI is registered only when the Zenodo draft is published. The release is described for citation systems in [`CITATION.cff`](./CITATION.cff), for research archives in [`.zenodo.json`](./.zenodo.json), and for machine agents in [`codemeta.json`](./codemeta.json). Use [`checksums.txt`](./checksums.txt) to verify every release file before analysis.
 
 ## Core calculation
 
@@ -99,7 +99,7 @@ fee_groups
 
 Licensed under [CC BY 4.0](./LICENSE.md). Attribute the work as:
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.4). Zenodo. https://doi.org/10.5281/zenodo.21765280
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.5). Zenodo. https://doi.org/10.5281/zenodo.21765625
 
 Contributions that clarify the processor-neutral taxonomy are welcome. Product support, pricing requests, and merchant applications should use the official channels below instead of GitHub issues.
 

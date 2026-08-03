@@ -2,6 +2,14 @@
 
 All notable changes to the versioned dataset package are recorded here. Published release artifacts remain immutable.
 
+## 1.1.5 - 2026-08-03
+
+- Model Kaggle's platform archive expansion explicitly: accept either the intact canonical archive plus sidecar or the exact expanded archive tree plus sidecar.
+- Reconstruct the expanded inventory only from the canonical release archive and compare every path and byte without extracting files or executing downloaded code.
+- Reject extra, missing, duplicate, case-fold-colliding, traversal, absolute, backslash, NUL, symlink, oversized, corrupt, or unexpected transformed members.
+- Declare the current versioned source and archival DOI in Kaggle's supported `userSpecifiedSources` metadata so old release provenance cannot persist silently.
+- Preserve schema 1.1.0 and every v1.1.4 privacy, determinism, mirror-inventory, provenance, and non-goal boundary.
+
 ## 1.1.4 - 2026-08-03
 
 - Build the release ZIP from the declared manifest with fixed timestamps, stable ordering, fixed permissions, and stored members so clean builds produce identical bytes across platforms.
