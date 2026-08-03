@@ -242,34 +242,86 @@ def _md5(value: bytes) -> str:
 def _kaggle_bundle_matches(
     bundle: bytes, archive: bytes, sidecar: bytes, zip_name: str, sidecar_name: str
 ) -> bool:
-    expected = {zip_name: archive, sidecar_name: sidecar}
+    if (
+        PurePosixPath(zip_name).name != zip_name
+        or not zip_name.endswith(".zip")
+        or PurePosixPath(sidecar_name).name != sidecar_name
+        or len(archive) > MAX_ARCHIVE_BYTES
+        or len(sidecar) > MAX_JSON_BYTES
+    ):
+        return False
+    expected_container = {zip_name: archive, sidecar_name: sidecar}
     try:
         with zipfile.ZipFile(io.BytesIO(bundle)) as candidate:
-            members = [item for item in candidate.infolist() if not item.is_dir()]
-            if len(members) != len(expected):
+            infos = candidate.infolist()
+            if len(infos) > MAX_RELEASE_FILE_COUNT + 32:
                 return False
-            observed: dict[str, zipfile.ZipInfo] = {}
+            observed: dict[str, bytes] = {}
             folded: set[str] = set()
-            for info in members:
+            total_bytes = 0
+            for info in infos:
                 name = info.filename
+                if not isinstance(name, str) or "\\" in name or "\x00" in name:
+                    return False
                 path = PurePosixPath(name)
                 mode = info.external_attr >> 16
                 if (
                     path.is_absolute()
                     or ".." in path.parts
-                    or path.as_posix() != name
-                    or name in observed
-                    or name.casefold() in folded
                     or stat.S_ISLNK(mode)
-                    or info.file_size > MAX_ARCHIVE_BYTES
                 ):
                     return False
-                observed[name] = info
+                if info.is_dir():
+                    return False
+                if (
+                    path.as_posix() != name
+                    or name in observed
+                    or name.casefold() in folded
+                    or info.file_size > MAX_RELEASE_FILE_BYTES
+                ):
+                    return False
+                total_bytes += info.file_size
+                if total_bytes > MAX_RELEASE_TOTAL_BYTES + MAX_JSON_BYTES:
+                    return False
+                observed[name] = candidate.read(info)
                 folded.add(name.casefold())
-            return set(observed) == set(expected) and all(
-                candidate.read(observed[name]) == value
-                for name, value in expected.items()
-            )
+            if observed == expected_container:
+                return True
+
+        expanded_prefix = f"{PurePosixPath(zip_name).stem}/"
+        expanded_expected = {sidecar_name: sidecar}
+        expanded_folded = {sidecar_name.casefold()}
+        with zipfile.ZipFile(io.BytesIO(archive)) as release_archive:
+            release_infos = release_archive.infolist()
+            if len(release_infos) > MAX_RELEASE_FILE_COUNT + 32:
+                return False
+            release_total = 0
+            for info in release_infos:
+                if info.is_dir():
+                    return False
+                name = info.filename
+                path = PurePosixPath(name)
+                mode = info.external_attr >> 16
+                expanded_name = expanded_prefix + name
+                if (
+                    not isinstance(name, str)
+                    or "\\" in name
+                    or "\x00" in name
+                    or path.is_absolute()
+                    or ".." in path.parts
+                    or path.as_posix() != name
+                    or stat.S_ISLNK(mode)
+                    or info.file_size > MAX_RELEASE_FILE_BYTES
+                    or expanded_name in expanded_expected
+                    or expanded_name.casefold() in expanded_folded
+                ):
+                    return False
+                release_total += info.file_size
+                if release_total > MAX_RELEASE_TOTAL_BYTES:
+                    return False
+                expanded_expected[expanded_name] = release_archive.read(info)
+                expanded_folded.add(expanded_name.casefold())
+        return observed == expanded_expected
     except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, zlib.error):
         return False
 

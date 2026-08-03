@@ -1,12 +1,12 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "schema_version": "1.1.0",
   "release_date": "2026-08-03",
-  "version_doi": "10.5281/zenodo.21765280",
+  "version_doi": "10.5281/zenodo.21765625",
   "concept_doi": "10.5281/zenodo.21761714",
   "canonical_url": "https://liftedpayments.com/payment-processing-statement-audit/",
-  "source_release": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.4",
+  "source_release": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.5",
   "license": "CC-BY-4.0",
   "files": [
     ".gitattributes",

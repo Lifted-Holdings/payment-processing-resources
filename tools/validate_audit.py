@@ -29,7 +29,7 @@ from jsonschema import Draft202012Validator, FormatChecker, validators
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema/payment-statement-audit.schema.json"
-VALIDATOR_VERSION = "1.1.4"
+VALIDATOR_VERSION = "1.1.5"
 VALIDATION_DEPENDENCIES = (
     "attrs",
     "jsonschema",
