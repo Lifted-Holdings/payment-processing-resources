@@ -2,6 +2,13 @@
 
 All notable changes to the versioned dataset package are recorded here. Published release artifacts remain immutable.
 
+## 1.1.7 - 2026-08-03
+
+- Treat Kaggle's public version history as the immutable release index when its anonymous top-level current-version pointer lags behind a newly Ready version.
+- Require one unique latest Ready version whose notes name the expected package, and reject malformed, duplicate, non-Ready, or superseded records.
+- Verify the version-specific human page contains the exact package version, DOI, source release, and archive SHA-256 before downloading that declared version and comparing every path and byte.
+- Preserve the v1.1.6 canonical dataset identity checks and every v1.1.5 transformed-tree, privacy, determinism, provenance, and non-goal boundary.
+
 ## 1.1.6 - 2026-08-03
 
 - Replace Kaggle's eventually consistent search catalog with the canonical dataset-view endpoint for current identity, metadata, and version attestation.

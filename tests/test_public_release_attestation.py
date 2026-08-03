@@ -74,12 +74,12 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
         self.manifest = {
             "title": TITLE,
-            "version": "1.1.6",
+            "version": "1.1.7",
             "release_date": "2026-08-02",
             "version_doi": "10.5281/zenodo.99999999",
             "concept_doi": "10.5281/zenodo.21761714",
             "canonical_url": CANONICAL_URL,
-            "source_release": f"{SOURCE_REPOSITORY}/releases/tag/v1.1.6",
+            "source_release": f"{SOURCE_REPOSITORY}/releases/tag/v1.1.7",
             "license": "CC-BY-4.0",
             "files": ["README.md"],
         }
@@ -93,21 +93,21 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for name, value in members.items():
-                archive.writestr(f"payment-processing-resources-1.1.6/{name}", value)
+                archive.writestr(f"payment-processing-resources-1.1.7/{name}", value)
         return output.getvalue()
 
     def make_transport(self, archive=None):
         archive = archive or self.make_zip()
         digest = hashlib.sha256(archive).hexdigest()
-        zip_name = "lifted-payments-statement-audit-model-v1.1.6.zip"
+        zip_name = "lifted-payments-statement-audit-model-v1.1.7.zip"
         sidecar_name = "release-archive.sha256"
         github_zip = (
             f"https://github.com/Lifted-Holdings/payment-processing-resources/"
-            f"releases/download/v1.1.6/{zip_name}"
+            f"releases/download/v1.1.7/{zip_name}"
         )
         github_sidecar = (
             "https://github.com/Lifted-Holdings/payment-processing-resources/"
-            f"releases/download/v1.1.6/{sidecar_name}"
+            f"releases/download/v1.1.7/{sidecar_name}"
         )
         zenodo_zip = (
             f"https://zenodo.org/api/records/99999999/files/{zip_name}/content"
@@ -131,6 +131,10 @@ class PublicReleaseAttestationTests(unittest.TestCase):
             "liftedpayments/payment-statement-audit-model"
         )
         kaggle_version = 3
+        kaggle_version_page = (
+            "https://www.kaggle.com/datasets/liftedpayments/"
+            f"payment-statement-audit-model/versions/{kaggle_version}"
+        )
         sidecar = f"{digest}  {zip_name}\n".encode()
         kaggle_bundle_buffer = io.BytesIO()
         with zipfile.ZipFile(
@@ -147,7 +151,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                     )
         kaggle_bundle = kaggle_bundle_buffer.getvalue()
         github = {
-            "tag_name": "v1.1.6",
+            "tag_name": "v1.1.7",
             "draft": False,
             "prerelease": False,
             "html_url": self.manifest["source_release"],
@@ -173,7 +177,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
             "metadata": {
                 "title": TITLE,
                 "publication_date": "2026-08-02",
-                "version": "1.1.6",
+                "version": "1.1.7",
                 "license": {"id": "cc-by-4.0"},
                 "related_identifiers": [
                     {"identifier": CANONICAL_URL, "relation": "isDocumentedBy"},
@@ -226,7 +230,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
         transport = FakeTransport(
             json_values={
-                "https://api.github.com/repos/Lifted-Holdings/payment-processing-resources/releases/tags/v1.1.6": github,
+                "https://api.github.com/repos/Lifted-Holdings/payment-processing-resources/releases/tags/v1.1.7": github,
                 "https://zenodo.org/api/records/99999999": zenodo,
                 "https://huggingface.co/api/datasets/Liftedholdings/payment-statement-audit-model": huggingface,
                 kaggle_view: {
@@ -236,8 +240,20 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                     "licenseName": "Attribution 4.0 International (CC BY 4.0)",
                     "isPrivate": False,
                     "currentVersionNumber": kaggle_version,
+                    "versions": [
+                        {
+                            "versionNumber": kaggle_version,
+                            "versionNotes": "v1.1.7: exact public release",
+                            "status": "Ready",
+                        },
+                        {
+                            "versionNumber": kaggle_version - 1,
+                            "versionNotes": "v1.1.5: prior public release",
+                            "status": "Ready",
+                        },
+                    ],
                     "description": (
-                        "Version 1.1.6. "
+                        "Version 1.1.7. "
                         f"{self.manifest['version_doi']} "
                         f"{self.manifest['source_release']} "
                         f"{digest}"
@@ -255,7 +271,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                             "target": expected_commit,
                             "target_type": "revision",
                         },
-                        "refs/tags/v1.1.6": {
+                        "refs/tags/v1.1.7": {
                             "target": release_id,
                             "target_type": "release",
                         },
@@ -263,7 +279,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 },
                 software_heritage_release: {
                     "id": release_id,
-                    "name": "v1.1.6",
+                    "name": "v1.1.7",
                     "target": expected_commit,
                     "target_type": "revision",
                 },
@@ -276,6 +292,10 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 huggingface_zip: archive,
                 huggingface_sidecar: sidecar,
                 huggingface_readme: (ROOT / "distribution/huggingface/README.md").read_bytes(),
+                kaggle_version_page: (
+                    f"<html>Version 1.1.7 {self.manifest['version_doi']} "
+                    f"{self.manifest['source_release']} {digest}</html>"
+                ).encode(),
                 (
                     kaggle_download,
                     tuple(
@@ -311,7 +331,25 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         self.assertEqual(snapshot_id, result.software_heritage_snapshot)
         self.assertEqual(3, result.kaggle_version)
 
-    def test_stale_kaggle_view_blocks_attestation(self):
+    def test_stale_kaggle_current_pointer_uses_latest_ready_version(self):
+        transport, _, expected_commit, _ = self.make_transport()
+        kaggle_view = next(
+            url for url in transport.json_values if "kaggle.com/api/v1/datasets/view" in url
+        )
+        transport.json_values[kaggle_view]["currentVersionNumber"] = 2
+        transport.json_values[kaggle_view]["description"] = "Version 1.1.1"
+
+        result = self.attestation.attest_public_release(
+            self.root,
+            self.manifest,
+            transport=transport,
+            expected_commit=expected_commit,
+        )
+
+        self.assertTrue(result.verified, result.failure_codes)
+        self.assertEqual(3, result.kaggle_version)
+
+    def test_current_kaggle_description_must_match_release(self):
         transport, _, expected_commit, _ = self.make_transport()
         kaggle_view = next(
             url for url in transport.json_values if "kaggle.com/api/v1/datasets/view" in url
@@ -327,6 +365,119 @@ class PublicReleaseAttestationTests(unittest.TestCase):
 
         self.assertFalse(result.verified)
         self.assertIn("kaggle_release_invalid", result.failure_codes)
+
+    def test_stale_kaggle_version_history_blocks_attestation(self):
+        transport, _, expected_commit, _ = self.make_transport()
+        kaggle_view = next(
+            url for url in transport.json_values if "kaggle.com/api/v1/datasets/view" in url
+        )
+        transport.json_values[kaggle_view]["versions"][0]["versionNotes"] = (
+            "v1.1.5: stale public release"
+        )
+
+        result = self.attestation.attest_public_release(
+            self.root,
+            self.manifest,
+            transport=transport,
+            expected_commit=expected_commit,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertIn("kaggle_release_invalid", result.failure_codes)
+
+    def test_nonready_or_superseded_kaggle_release_blocks_attestation(self):
+        for mutation in ("nonready", "superseded"):
+            with self.subTest(mutation=mutation):
+                transport, _, expected_commit, _ = self.make_transport()
+                kaggle_view = next(
+                    url
+                    for url in transport.json_values
+                    if "kaggle.com/api/v1/datasets/view" in url
+                )
+                versions = transport.json_values[kaggle_view]["versions"]
+                if mutation == "nonready":
+                    versions[0]["status"] = "Pending"
+                else:
+                    versions.insert(
+                        0,
+                        {
+                            "versionNumber": 4,
+                            "versionNotes": "v1.2.0: newer public release",
+                            "status": "Ready",
+                        },
+                    )
+
+                result = self.attestation.attest_public_release(
+                    self.root,
+                    self.manifest,
+                    transport=transport,
+                    expected_commit=expected_commit,
+                )
+
+                self.assertFalse(result.verified)
+                self.assertIn("kaggle_release_invalid", result.failure_codes)
+
+    def test_malformed_kaggle_version_history_blocks_attestation(self):
+        mutations = {
+            "missing": lambda item: item.pop("versions"),
+            "duplicate": lambda item: item["versions"].append(
+                dict(item["versions"][0])
+            ),
+            "current_missing": lambda item: item.update(currentVersionNumber=99),
+            "boolean_number": lambda item: item["versions"][0].update(
+                versionNumber=True
+            ),
+            "nonstring_status": lambda item: item["versions"][0].update(status=7),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                transport, _, expected_commit, _ = self.make_transport()
+                kaggle_view = next(
+                    url
+                    for url in transport.json_values
+                    if "kaggle.com/api/v1/datasets/view" in url
+                )
+                mutate(transport.json_values[kaggle_view])
+
+                result = self.attestation.attest_public_release(
+                    self.root,
+                    self.manifest,
+                    transport=transport,
+                    expected_commit=expected_commit,
+                )
+
+                self.assertFalse(result.verified)
+                self.assertIn("kaggle_release_invalid", result.failure_codes)
+
+    def test_kaggle_version_page_missing_release_identity_blocks_attestation(self):
+        for marker_name in ("version", "doi", "source", "digest"):
+            with self.subTest(marker_name=marker_name):
+                transport, digest, expected_commit, _ = self.make_transport()
+                page = next(
+                    url
+                    for url in transport.byte_values
+                    if isinstance(url, str) and "/versions/" in url
+                )
+                markers = {
+                    "version": b"Version 1.1.7",
+                    "doi": self.manifest["version_doi"].encode(),
+                    "source": self.manifest["source_release"].encode(),
+                    "digest": digest.encode(),
+                }
+                marker = markers[marker_name]
+                transport.byte_values[page] = transport.byte_values[page].replace(
+                    marker, b"0" * len(marker)
+                )
+
+                result = self.attestation.attest_public_release(
+                    self.root,
+                    self.manifest,
+                    transport=transport,
+                    expected_commit=expected_commit,
+                )
+
+                self.assertFalse(result.verified)
+                self.assertIn("kaggle_release_invalid", result.failure_codes)
 
     def test_extra_zenodo_or_huggingface_files_block_attestation(self):
         for provider in ("zenodo", "huggingface"):
@@ -356,7 +507,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 self.assertIn(expected_failure, result.failure_codes)
 
     def test_corrupt_deflated_kaggle_bundle_fails_closed(self):
-        zip_name = "lifted-payments-statement-audit-model-v1.1.6.zip"
+        zip_name = "lifted-payments-statement-audit-model-v1.1.7.zip"
         sidecar_name = "release-archive.sha256"
         archive = self.make_zip()
         sidecar = b"0" * 64 + b"  " + zip_name.encode() + b"\n"
@@ -377,7 +528,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
 
     def test_intact_kaggle_archive_and_sidecar_are_accepted(self):
-        zip_name = "lifted-payments-statement-audit-model-v1.1.6.zip"
+        zip_name = "lifted-payments-statement-audit-model-v1.1.7.zip"
         sidecar_name = "release-archive.sha256"
         archive = self.make_zip()
         sidecar = f"{hashlib.sha256(archive).hexdigest()}  {zip_name}\n".encode()
@@ -393,7 +544,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
 
     def test_kaggle_platform_expansion_rejects_tree_drift(self):
-        zip_name = "lifted-payments-statement-audit-model-v1.1.6.zip"
+        zip_name = "lifted-payments-statement-audit-model-v1.1.7.zip"
         sidecar_name = "release-archive.sha256"
         archive = self.make_zip()
         sidecar = f"{hashlib.sha256(archive).hexdigest()}  {zip_name}\n".encode()

@@ -326,6 +326,61 @@ def _kaggle_bundle_matches(
         return False
 
 
+def _select_kaggle_release_version(item: dict[str, Any], version: str) -> int:
+    """Select the unique latest Ready version whose notes name this release.
+
+    Kaggle's anonymous dataset view can expose a newly Ready immutable version in
+    ``versions`` before its cached top-level ``currentVersionNumber`` advances.
+    Treat the version history as the release index, but fail closed on malformed,
+    duplicate, non-latest, or non-Ready records.
+    """
+
+    versions = item.get("versions")
+    current_version = item.get("currentVersionNumber")
+    if (
+        not isinstance(versions, list)
+        or not versions
+        or not isinstance(current_version, int)
+        or isinstance(current_version, bool)
+        or current_version <= 0
+    ):
+        raise ValueError("catalog_versions")
+
+    records: list[tuple[int, str, str]] = []
+    for record in versions:
+        if not isinstance(record, dict):
+            raise ValueError("catalog_version_record")
+        number = record.get("versionNumber")
+        notes = record.get("versionNotes")
+        status = record.get("status")
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number <= 0
+            or not isinstance(notes, str)
+            or not isinstance(status, str)
+        ):
+            raise ValueError("catalog_version_record")
+        records.append((number, notes, status))
+
+    numbers = [number for number, _, _ in records]
+    if len(numbers) != len(set(numbers)) or current_version not in numbers:
+        raise ValueError("catalog_version_sequence")
+
+    marker = f"v{version}:"
+    matches = [
+        number
+        for number, notes, status in records
+        if status == "Ready" and notes.startswith(marker)
+    ]
+    if len(matches) != 1:
+        raise ValueError("catalog_release_version")
+    selected = matches[0]
+    if selected != max(numbers) or current_version > selected:
+        raise ValueError("catalog_release_not_latest")
+    return selected
+
+
 def attest_public_release(
     root: Path | str,
     manifest: dict[str, Any],
@@ -559,7 +614,8 @@ def attest_public_release(
             "liftedpayments/payment-statement-audit-model"
         )
         item = transport.get_json(kaggle_view_url, max_bytes=MAX_JSON_BYTES)
-        kaggle_version = item.get("currentVersionNumber")
+        kaggle_version = _select_kaggle_release_version(item, version)
+        current_version = item.get("currentVersionNumber")
         description = item.get("description")
         if not (
             item.get("ref") == KAGGLE_REPOSITORY
@@ -567,17 +623,33 @@ def attest_public_release(
             and item.get("isPrivate") is False
             and item.get("licenseName")
             == "Attribution 4.0 International (CC BY 4.0)"
-            and isinstance(kaggle_version, int)
-            and kaggle_version > 0
             and isinstance(description, str)
-            and f"Version {version}" in description
-            and version_doi in description
-            and source_release in description
-            and archive_sha256 in description
+            and (
+                current_version < kaggle_version
+                or (
+                    f"Version {version}" in description
+                    and version_doi in description
+                    and source_release in description
+                    and archive_sha256 in description
+                )
+            )
             and archive_bytes is not None
             and sidecar_bytes is not None
         ):
             raise ValueError("catalog_metadata")
+        version_page = transport.get_bytes(
+            "https://www.kaggle.com/datasets/liftedpayments/"
+            f"payment-statement-audit-model/versions/{kaggle_version}",
+            max_bytes=MAX_JSON_BYTES,
+        )
+        required_version_page_markers = (
+            f"Version {version}".encode(),
+            version_doi.encode(),
+            source_release.encode(),
+            archive_sha256.encode(),
+        )
+        if not all(marker in version_page for marker in required_version_page_markers):
+            raise ValueError("catalog_version_page")
         kaggle_bundle = transport.post_bytes(
             "https://api.kaggle.com/v1/"
             "datasets.DatasetApiService/DownloadDataset",
