@@ -554,23 +554,16 @@ def attest_public_release(
         failures.append("huggingface_release_invalid")
 
     try:
-        kaggle_list_url = (
-            "https://www.kaggle.com/api/v1/datasets/list"
-            "?search=payment-statement-audit-model"
+        kaggle_view_url = (
+            "https://www.kaggle.com/api/v1/datasets/view/"
+            "liftedpayments/payment-statement-audit-model"
         )
-        catalog = transport.get_json_value(kaggle_list_url, max_bytes=MAX_JSON_BYTES)
-        matches = [
-            item
-            for item in catalog
-            if isinstance(item, dict) and item.get("ref") == KAGGLE_REPOSITORY
-        ]
-        if len(matches) != 1:
-            raise ValueError("catalog_identity")
-        item = matches[0]
+        item = transport.get_json(kaggle_view_url, max_bytes=MAX_JSON_BYTES)
         kaggle_version = item.get("currentVersionNumber")
         description = item.get("description")
         if not (
-            item.get("title") == TITLE
+            item.get("ref") == KAGGLE_REPOSITORY
+            and item.get("title") == TITLE
             and item.get("isPrivate") is False
             and item.get("licenseName")
             == "Attribution 4.0 International (CC BY 4.0)"
