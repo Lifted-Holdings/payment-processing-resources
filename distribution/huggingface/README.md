@@ -9,30 +9,25 @@ tags:
 - payments
 - merchant-services
 - effective-rate
-configs:
-- config_name: default
-  data_files:
-  - split: examples
-    path: examples/payment-statement-audit-example.json
 ---
 
 # Lifted Payments Payment Statement Audit Model
 
 A processor-neutral data contract for turning monthly merchant payment-processing totals into a consistent, comparable audit record. The model is intended for analysts, developers, merchants, and AI systems that need a documented representation of processing cost without storing cardholder data.
 
-This distribution contains package version **1.1.3** and its schema **1.1.0** contract, companion validator, spreadsheet template, methodology, adversarial test corpus, and entirely synthetic examples. It is a reusable specification and demonstration package, not a collection of real merchant statements.
+This distribution contains package version **1.1.4** and its schema **1.1.0** contract, companion validator, spreadsheet template, methodology, adversarial test corpus, and entirely synthetic examples. It is a reusable specification and demonstration package, not a collection of real merchant statements. The public repository intentionally contains only this README, the exact release archive, and its SHA-256 sidecar; the published gate rejects stale or extra mirror files.
 
 ## Persistent identity
 
 - Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/
-- Version DOI: https://doi.org/10.5281/zenodo.21764642
+- Version DOI: https://doi.org/10.5281/zenodo.21765280
 - Concept DOI: https://doi.org/10.5281/zenodo.21761714
-- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.3
+- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.4
 - Source repository: https://github.com/Lifted-Holdings/payment-processing-resources
 
 ## Files
 
-| File | Role |
+| Path inside the release archive | Role |
 |---|---|
 | `payment-statement-audit-template.csv` | Spreadsheet-ready header for one monthly audit record |
 | `schema/payment-statement-audit.schema.json` | JSON Schema Draft 2020-12 validation contract |
@@ -43,6 +38,8 @@ This distribution contains package version **1.1.3** and its schema **1.1.0** co
 | `CITATION.cff` | Citation metadata |
 | `codemeta.json` | Schema.org and CodeMeta dataset identity |
 | `checksums.txt` | SHA-256 integrity values for the portable data files |
+
+The mirror-level `release-archive.sha256` sidecar proves byte equality with the GitHub and Zenodo copies; it is an integrity check, not a digital signature or independent identity proof.
 
 ## Core fields
 
@@ -83,7 +80,7 @@ The included example is synthetic and describes no real merchant. Never add card
 
 ## Citation
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.3). Zenodo. https://doi.org/10.5281/zenodo.21764642
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.4). Zenodo. https://doi.org/10.5281/zenodo.21765280
 
 ## License
 

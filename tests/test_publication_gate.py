@@ -35,7 +35,7 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_release_manifest_has_one_explicit_versioned_identity(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("1.1.3", manifest["version"])
+        self.assertEqual("1.1.4", manifest["version"])
         self.assertEqual("1.1.0", manifest["schema_version"])
         self.assertEqual(
             "10.5281/zenodo.21761714", manifest["concept_doi"]
@@ -44,7 +44,7 @@ class PublicationGateTests(unittest.TestCase):
             "https://liftedpayments.com/payment-processing-statement-audit/",
             manifest["canonical_url"],
         )
-        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.3"))
+        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.4"))
         self.assertEqual(len(manifest["files"]), len(set(manifest["files"])))
         self.assertGreaterEqual(len(manifest["files"]), 20)
 
@@ -60,6 +60,9 @@ class PublicationGateTests(unittest.TestCase):
         self.assertIn("corpus_validation", {check["code"] for check in report["checks"]})
         self.assertIn("dependency_lock", {check["code"] for check in report["checks"]})
         self.assertIn("utf8_text_assets", {check["code"] for check in report["checks"]})
+        self.assertIn(
+            "reproducible_archive", {check["code"] for check in report["checks"]}
+        )
         self.assertIn(
             "repository_provenance", {check["code"] for check in report["checks"]}
         )
@@ -236,6 +239,26 @@ class PublicationGateTests(unittest.TestCase):
                     self.assertEqual("fail", checks["public_content_safety"])
                     self.assertEqual("blocked", report["status"])
 
+    def test_gate_rejects_unicode_controls_in_release_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            with (candidate / "README.md").open("a", encoding="utf-8") as handle:
+                handle.write("\nSpoofed status: \u202edesrever\n")
+            subprocess.run(
+                [sys.executable, "tools/update_checksums.py", "--write"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            report = self.gate.build_publication_report(candidate, mode="package")
+            checks = {check["code"]: check["status"] for check in report["checks"]}
+            self.assertEqual("fail", checks["public_content_safety"])
+            self.assertEqual("blocked", report["status"])
+
     def test_gate_executes_the_validator_from_the_candidate_release(self):
         with tempfile.TemporaryDirectory() as directory:
             candidate = Path(directory) / "release"
@@ -251,10 +274,14 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_gate_requires_every_security_critical_release_asset(self):
         critical_assets = (
+            "tools/build_release_archive.py",
+            "tools/build_kaggle_distribution.py",
             "tools/public_release_attestation.py",
             "tools/publication_gate.py",
             "tools/release_provenance.py",
             "tests/test_public_release_attestation.py",
+            "tests/test_kaggle_distribution.py",
+            "tests/test_release_archive.py",
             "tests/test_release_provenance.py",
         )
         for critical_asset in critical_assets:

@@ -8,7 +8,9 @@ import io
 import json
 import re
 import stat
+import sys
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -16,25 +18,36 @@ from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+from build_release_archive import build_archive_bytes  # noqa: E402
+
+
 TITLE = "Lifted Payments Payment Statement Audit Model"
 CANONICAL_URL = "https://liftedpayments.com/payment-processing-statement-audit/"
 SOURCE_REPOSITORY = "https://github.com/Lifted-Holdings/payment-processing-resources"
 HUGGINGFACE_REPOSITORY = "Liftedholdings/payment-statement-audit-model"
+KAGGLE_REPOSITORY = "liftedpayments/payment-statement-audit-model"
 HTTP_TIMEOUT_SECONDS = 5
 MAX_JSON_BYTES = 1024 * 1024
 MAX_ARCHIVE_BYTES = 10 * 1024 * 1024
 MAX_RELEASE_FILE_COUNT = 256
 MAX_RELEASE_FILE_BYTES = 5 * 1024 * 1024
-MAX_RELEASE_TOTAL_BYTES = 25 * 1024 * 1024
+MAX_RELEASE_TOTAL_BYTES = 8 * 1024 * 1024
 DOI_PATTERN = re.compile(r"^10\.5281/zenodo\.(\d+)$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 OBJECT_ID_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 EXACT_HOSTS = {
     "api.github.com",
+    "api.kaggle.com",
     "archive.softwareheritage.org",
     "doi.org",
     "github.com",
     "huggingface.co",
+    "storage.googleapis.com",
+    "www.kaggle.com",
     "zenodo.org",
 }
 TRUSTED_HOST_SUFFIXES = (
@@ -53,6 +66,7 @@ class AttestationResult:
     github_release_url: str | None
     zenodo_record_url: str | None
     huggingface_commit: str | None
+    kaggle_version: int | None
     software_heritage_snapshot: str | None
 
 
@@ -94,17 +108,19 @@ class HttpTransport:
         *,
         max_bytes: int,
         accept: str = "application/json, application/octet-stream;q=0.9, */*;q=0.1",
+        data: bytes | None = None,
+        content_type: str | None = None,
     ) -> tuple[bytes, str]:
         _validate_url(url)
         if not isinstance(max_bytes, int) or max_bytes <= 0:
             raise ValueError("response_limit_invalid")
-        request = Request(
-            url,
-            headers={
+        headers = {
                 "Accept": accept,
                 "User-Agent": "LiftedPayments-release-attestation/1.0",
-            },
-        )
+            }
+        if content_type is not None:
+            headers["Content-Type"] = content_type
+        request = Request(url, data=data, headers=headers)
         with self._opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             final_url = _validate_url(response.geturl())
             content_length = response.headers.get("Content-Length")
@@ -119,11 +135,29 @@ class HttpTransport:
         return self._open(url, max_bytes=max_bytes)[0]
 
     def get_json(self, url: str, *, max_bytes: int) -> dict[str, Any]:
-        payload = self.get_bytes(url, max_bytes=max_bytes)
-        document = json.loads(payload.decode("utf-8", errors="strict"))
+        document = self.get_json_value(url, max_bytes=max_bytes)
         if not isinstance(document, dict):
             raise ValueError("json_root_invalid")
         return document
+
+    def get_json_value(self, url: str, *, max_bytes: int) -> Any:
+        payload = self.get_bytes(url, max_bytes=max_bytes)
+        return json.loads(payload.decode("utf-8", errors="strict"))
+
+    def post_bytes(
+        self, url: str, document: dict[str, Any], *, max_bytes: int
+    ) -> bytes:
+        if not isinstance(document, dict):
+            raise ValueError("json_request_invalid")
+        payload = json.dumps(
+            document, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        return self._open(
+            url,
+            max_bytes=max_bytes,
+            data=payload,
+            content_type="application/json",
+        )[0]
 
     def resolve(self, url: str, *, max_bytes: int) -> str:
         return self._open(
@@ -196,13 +230,48 @@ def _archive_matches_release(
                     or archive.read(info) != candidate.read_bytes()
                 ):
                     return False
-    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
+    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, zlib.error):
         return False
     return True
 
 
 def _md5(value: bytes) -> str:
     return hashlib.md5(value, usedforsecurity=False).hexdigest()
+
+
+def _kaggle_bundle_matches(
+    bundle: bytes, archive: bytes, sidecar: bytes, zip_name: str, sidecar_name: str
+) -> bool:
+    expected = {zip_name: archive, sidecar_name: sidecar}
+    try:
+        with zipfile.ZipFile(io.BytesIO(bundle)) as candidate:
+            members = [item for item in candidate.infolist() if not item.is_dir()]
+            if len(members) != len(expected):
+                return False
+            observed: dict[str, zipfile.ZipInfo] = {}
+            folded: set[str] = set()
+            for info in members:
+                name = info.filename
+                path = PurePosixPath(name)
+                mode = info.external_attr >> 16
+                if (
+                    path.is_absolute()
+                    or ".." in path.parts
+                    or path.as_posix() != name
+                    or name in observed
+                    or name.casefold() in folded
+                    or stat.S_ISLNK(mode)
+                    or info.file_size > MAX_ARCHIVE_BYTES
+                ):
+                    return False
+                observed[name] = info
+                folded.add(name.casefold())
+            return set(observed) == set(expected) and all(
+                candidate.read(observed[name]) == value
+                for name, value in expected.items()
+            )
+    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, zlib.error):
+        return False
 
 
 def attest_public_release(
@@ -221,6 +290,7 @@ def attest_public_release(
     github_release_url: str | None = None
     zenodo_record_url: str | None = None
     huggingface_commit: str | None = None
+    kaggle_version: int | None = None
     software_heritage_snapshot: str | None = None
 
     try:
@@ -244,13 +314,13 @@ def attest_public_release(
         record_id = doi_match.group(1)
     except (KeyError, TypeError, ValueError):
         return AttestationResult(
-            False, ("manifest_identity_invalid",), None, None, None, None, None
+            False, ("manifest_identity_invalid",), None, None, None, None, None, None
         )
     if not isinstance(expected_commit, str) or not OBJECT_ID_PATTERN.fullmatch(
         expected_commit
     ):
         return AttestationResult(
-            False, ("expected_commit_invalid",), None, None, None, None, None
+            False, ("expected_commit_invalid",), None, None, None, None, None, None
         )
 
     zip_name = f"lifted-payments-statement-audit-model-v{version}.zip"
@@ -268,10 +338,6 @@ def attest_public_release(
     zenodo_record_url = f"https://zenodo.org/records/{record_id}"
     huggingface_api = (
         f"https://huggingface.co/api/datasets/{HUGGINGFACE_REPOSITORY}"
-    )
-    huggingface_zip = (
-        f"https://huggingface.co/datasets/{HUGGINGFACE_REPOSITORY}/"
-        f"resolve/main/{quote(zip_name)}"
     )
     encoded_origin = quote(SOURCE_REPOSITORY, safe="")
     software_heritage_visit = (
@@ -324,7 +390,15 @@ def attest_public_release(
     except (KeyError, OSError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
         failures.append("github_release_invalid")
 
-    if archive_bytes is None or not _archive_matches_release(root, manifest, archive_bytes):
+    try:
+        reproducible_archive = build_archive_bytes(root, manifest)
+    except (OSError, TypeError, ValueError):
+        reproducible_archive = None
+    if (
+        archive_bytes is None
+        or archive_bytes != reproducible_archive
+        or not _archive_matches_release(root, manifest, archive_bytes)
+    ):
         failures.append("release_archive_invalid")
 
     try:
@@ -355,6 +429,8 @@ def attest_public_release(
         zenodo_by_name = {
             item.get("key"): item for item in zenodo_files if isinstance(item, dict)
         }
+        if set(zenodo_by_name) != {zip_name, sidecar_name}:
+            raise ValueError("file_inventory")
         for name, expected_bytes, byte_limit in (
             (zip_name, archive_bytes, MAX_ARCHIVE_BYTES),
             (sidecar_name, sidecar_bytes, 1024),
@@ -391,6 +467,7 @@ def attest_public_release(
             item.get("rfilename") for item in siblings if isinstance(item, dict)
         }
         huggingface_commit = huggingface.get("sha")
+        expected_siblings = {"README.md", zip_name, sidecar_name}
         if not (
             huggingface.get("id") == HUGGINGFACE_REPOSITORY
             and huggingface.get("private") is False
@@ -398,16 +475,80 @@ def attest_public_release(
             and huggingface.get("gated") is False
             and isinstance(huggingface_commit, str)
             and OBJECT_ID_PATTERN.fullmatch(huggingface_commit)
-            and zip_name in sibling_names
+            and sibling_names == expected_siblings
             and archive_bytes is not None
+            and sidecar_bytes is not None
             and transport.get_bytes(
-                huggingface_zip, max_bytes=MAX_ARCHIVE_BYTES
+                f"https://huggingface.co/datasets/{HUGGINGFACE_REPOSITORY}/"
+                f"resolve/{huggingface_commit}/{quote(zip_name)}",
+                max_bytes=MAX_ARCHIVE_BYTES,
             )
             == archive_bytes
+            and transport.get_bytes(
+                f"https://huggingface.co/datasets/{HUGGINGFACE_REPOSITORY}/"
+                f"resolve/{huggingface_commit}/{sidecar_name}",
+                max_bytes=1024,
+            )
+            == sidecar_bytes
+            and transport.get_bytes(
+                f"https://huggingface.co/datasets/{HUGGINGFACE_REPOSITORY}/"
+                f"resolve/{huggingface_commit}/README.md",
+                max_bytes=MAX_JSON_BYTES,
+            )
+            == (root / "distribution/huggingface/README.md").read_bytes()
         ):
             raise ValueError("huggingface")
     except (OSError, TypeError, ValueError):
         failures.append("huggingface_release_invalid")
+
+    try:
+        kaggle_list_url = (
+            "https://www.kaggle.com/api/v1/datasets/list"
+            "?search=payment-statement-audit-model"
+        )
+        catalog = transport.get_json_value(kaggle_list_url, max_bytes=MAX_JSON_BYTES)
+        matches = [
+            item
+            for item in catalog
+            if isinstance(item, dict) and item.get("ref") == KAGGLE_REPOSITORY
+        ]
+        if len(matches) != 1:
+            raise ValueError("catalog_identity")
+        item = matches[0]
+        kaggle_version = item.get("currentVersionNumber")
+        description = item.get("description")
+        if not (
+            item.get("title") == TITLE
+            and item.get("isPrivate") is False
+            and item.get("licenseName")
+            == "Attribution 4.0 International (CC BY 4.0)"
+            and isinstance(kaggle_version, int)
+            and kaggle_version > 0
+            and isinstance(description, str)
+            and f"Version {version}" in description
+            and version_doi in description
+            and source_release in description
+            and archive_sha256 in description
+            and archive_bytes is not None
+            and sidecar_bytes is not None
+        ):
+            raise ValueError("catalog_metadata")
+        kaggle_bundle = transport.post_bytes(
+            "https://api.kaggle.com/v1/"
+            "datasets.DatasetApiService/DownloadDataset",
+            {
+                "ownerSlug": "liftedpayments",
+                "datasetSlug": "payment-statement-audit-model",
+                "datasetVersionNumber": kaggle_version,
+            },
+            max_bytes=MAX_ARCHIVE_BYTES * 2,
+        )
+        if not _kaggle_bundle_matches(
+            kaggle_bundle, archive_bytes, sidecar_bytes, zip_name, sidecar_name
+        ):
+            raise ValueError("catalog_bundle")
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        failures.append("kaggle_release_invalid")
 
     try:
         visit = transport.get_json(
@@ -476,5 +617,6 @@ def attest_public_release(
         github_release_url=github_release_url,
         zenodo_record_url=zenodo_record_url,
         huggingface_commit=huggingface_commit,
+        kaggle_version=kaggle_version,
         software_heritage_snapshot=software_heritage_snapshot,
     )

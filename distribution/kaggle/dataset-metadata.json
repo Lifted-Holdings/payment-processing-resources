@@ -1,7 +1,7 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
-  "subtitle": "A processor-neutral schema and synthetic merchant statement audit example",
-  "description": "Package 1.1.3 of the Lifted Payments processor-neutral model for normalizing monthly merchant payment-processing statement totals, preserving the schema 1.1.0 record contract. The package contains a CSV template, JSON Schema Draft 2020-12 contract, Decimal-safe companion validator, methodology, synthetic adversarial vectors, reproducible validation report, citation metadata, and SHA-256 checksums. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: https://doi.org/10.5281/zenodo.21764642 . No real merchant or cardholder data is included.",
+  "subtitle": "A processor-neutral merchant statement-audit model with reproducible validation",
+  "description": "Version 1.1.4 of the Lifted Payments processor-neutral model for normalizing merchant payment-processing statement totals. This Kaggle version contains the exact immutable release archive and SHA-256 sidecar. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: 10.5281/zenodo.21765280 . Versioned source: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.4 . Release archive SHA-256: {{RELEASE_ARCHIVE_SHA256}} . The package contains only synthetic data and no real merchant or cardholder data.",
   "id": "liftedpayments/payment-statement-audit-model",
   "licenses": [
     {
@@ -10,28 +10,12 @@
   ],
   "resources": [
     {
-      "path": "payment-statement-audit-template.csv",
-      "description": "Spreadsheet-ready header for one monthly payment statement audit record."
+      "path": "lifted-payments-statement-audit-model-v1.1.4.zip",
+      "description": "Byte-reproducible immutable release archive."
     },
     {
-      "path": "payment-statement-audit.schema.json",
-      "description": "JSON Schema Draft 2020-12 validation contract for audit records."
-    },
-    {
-      "path": "payment-statement-audit-example.json",
-      "description": "Complete synthetic example with no real merchant or cardholder data."
-    },
-    {
-      "path": "CITATION.cff",
-      "description": "Citation metadata for package version 1.1.3."
-    },
-    {
-      "path": "codemeta.json",
-      "description": "Schema.org and CodeMeta dataset identity."
-    },
-    {
-      "path": "checksums.txt",
-      "description": "SHA-256 integrity values for the portable source files."
+      "path": "release-archive.sha256",
+      "description": "SHA-256 digest sidecar for the release archive."
     }
   ],
   "keywords": [

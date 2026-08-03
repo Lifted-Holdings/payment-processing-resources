@@ -282,6 +282,36 @@ class AuditValidatorTests(unittest.TestCase):
         self.assertIn("prohibited_payment_data", self.issue_codes(pan))
         self.assertIn("prohibited_payment_data", self.issue_codes(cvv))
 
+    def test_truncated_pan_and_display_control_spoofing_are_rejected(self):
+        prohibited_notes = (
+            "Card ending in 4242",
+            "PAN **** **** **** 4242",
+            "Account last four 4242",
+            "Visa •••• 4242",
+            "Mastercard last 4 digits 5454",
+            "Card ends in 1111",
+            "ending in 4242",
+            "last four 4242",
+            "xxxx-xxxx-xxxx-4242",
+            "411111 **** 11111",
+            "first six 411111, last five 11111",
+        )
+        for note in prohibited_notes:
+            with self.subTest(note=note):
+                record = self.mutated(
+                    lambda row, value=note: row.update({"review_notes": [value]})
+                )
+                self.assertIn("prohibited_payment_data", self.issue_codes(record))
+
+        for marker in ("\u202e", "\u2066", "\u0000"):
+            with self.subTest(codepoint=ord(marker)):
+                record = self.mutated(
+                    lambda row, value=marker: row.update(
+                        {"review_notes": [f"classification {value}reversed"]}
+                    )
+                )
+                self.assertIn("unsafe_text_control", self.issue_codes(record))
+
     def test_identity_bank_and_credential_values_in_notes_are_rejected(self):
         prohibited_notes = (
             "Owner email is merchant@example.com",

@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -25,7 +27,7 @@ from release_provenance import inspect_repository  # noqa: E402
 from public_release_attestation import attest_public_release  # noqa: E402
 
 
-GATE_VERSION = "2.0.0"
+GATE_VERSION = "2.1.0"
 VERSION_DOI_PATTERN = re.compile(r"^10\.5281/zenodo\.\d+$")
 SEMVER_PATTERN = re.compile(r"^[1-9]\d*\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
 RELEASE_TITLE = "Lifted Payments Payment Statement Audit Model"
@@ -35,7 +37,7 @@ LICENSE_ID = "CC-BY-4.0"
 MAX_RELEASE_FILE_COUNT = 256
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_RELEASE_FILE_BYTES = 5 * 1024 * 1024
-MAX_RELEASE_TOTAL_BYTES = 25 * 1024 * 1024
+MAX_RELEASE_TOTAL_BYTES = 8 * 1024 * 1024
 RUNTIME_ONLY_DIRECTORIES = {
     ".git",
     ".mypy_cache",
@@ -76,10 +78,14 @@ REQUIRED_RELEASE_ASSETS = {
     "SECURITY.md",
     "test-vectors/manifest.json",
     "tests/test_audit_validator.py",
+    "tests/test_kaggle_distribution.py",
     "tests/test_publication_gate.py",
     "tests/test_public_release_attestation.py",
+    "tests/test_release_archive.py",
     "tests/test_release_assets.py",
     "tests/test_release_provenance.py",
+    "tools/build_release_archive.py",
+    "tools/build_kaggle_distribution.py",
     "tools/public_release_attestation.py",
     "tools/publication_gate.py",
     "tools/release_provenance.py",
@@ -108,7 +114,18 @@ def _run_candidate_corpus(root: Path) -> dict[str, Any]:
 
 def _run_candidate_regression_suite(root: Path) -> bool:
     result = subprocess.run(
-        [sys.executable, str(root / "tests/test_audit_validator.py"), "-q"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            str(root / "tests/test_audit_validator.py"),
+            str(root / "tests/test_kaggle_distribution.py"),
+            str(root / "tests/test_public_release_attestation.py"),
+            str(root / "tests/test_release_archive.py"),
+            str(root / "tests/test_release_assets.py"),
+            str(root / "tests/test_release_provenance.py"),
+        ],
         cwd=root,
         capture_output=True,
         text=True,
@@ -116,6 +133,39 @@ def _run_candidate_regression_suite(root: Path) -> bool:
         timeout=60,
     )
     return result.returncode == 0
+
+
+def _run_reproducible_archive(root: Path) -> bool:
+    with tempfile.TemporaryDirectory() as directory:
+        temporary = Path(directory)
+        archives = [temporary / "first.zip", temporary / "second.zip"]
+        for archive in archives:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "tools/build_release_archive.py"),
+                    "--root",
+                    str(root),
+                    "--output",
+                    str(archive),
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=20,
+            )
+            if result.returncode != 0 or not archive.is_file():
+                return False
+            sidecar = archive.with_name("release-archive.sha256")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            if (
+                not sidecar.is_file()
+                or sidecar.read_text(encoding="utf-8")
+                != f"{digest}  {archive.name}\n"
+            ):
+                return False
+        return archives[0].read_bytes() == archives[1].read_bytes()
 
 
 @dataclass(frozen=True)
@@ -134,6 +184,13 @@ def _check(code: str, passed: bool, success: str, failure: str) -> GateCheck:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _contains_unsafe_text_control(value: str) -> bool:
+    return any(
+        character not in "\t\n\r" and unicodedata.category(character) in {"Cc", "Cf"}
+        for character in value
+    )
 
 
 def _load_manifest(root: Path) -> dict[str, Any]:
@@ -624,6 +681,7 @@ def build_publication_report(
             safe_paths
             and release_sizes_are_safe
             and not SECRET_PATTERN.search(public_text)
+            and not _contains_unsafe_text_control(public_text)
         )
     except (UnicodeError, OSError):
         safe_public_text = False
@@ -631,8 +689,8 @@ def build_publication_report(
         _check(
             "public_content_safety",
             safe_public_text,
-            "Public files contain no credential signatures.",
-            "Public files contain a credential signature.",
+            "Public files contain no credential signatures or unsafe text controls.",
+            "Public files contain a credential signature or unsafe text control.",
         )
     )
 
@@ -661,6 +719,20 @@ def build_publication_report(
         )
 
     execution_ready = static_ready and provenance_ready
+    try:
+        reproducible_archive_ready = execution_ready and _run_reproducible_archive(root)
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
+        reproducible_archive_ready = False
+    checks.append(
+        _check(
+            "reproducible_archive",
+            reproducible_archive_ready,
+            "Two clean release builds produced the same bounded archive bytes and digest sidecars.",
+            "The release archive builder was unavailable, unsafe, or not byte-reproducible.",
+        )
+    )
+
+    execution_ready = execution_ready and reproducible_archive_ready
     try:
         corpus_report = (
             _run_candidate_corpus(root) if execution_ready else {"status": "fail"}

@@ -41,7 +41,7 @@ Validation errors expose only rule code, JSON Pointer path, and a fixed message.
 
 ## Privacy and security boundary
 
-This model needs statement-level aggregates only. It has no fields for PAN, truncated PAN, cardholder name, expiration date, track data, security codes, PIN/PIN block, bank account or routing numbers, tax or government identifiers, merchant owner data, credentials, tokens, or secrets. Unknown fields are rejected. Notes are scanned for Luhn-valid PAN-like sequences, labeled authentication/bank data, email addresses, and common credential patterns.
+This model needs statement-level aggregates only. It has no fields for PAN, truncated PAN, cardholder name, expiration date, track data, security codes, PIN/PIN block, bank account or routing numbers, tax or government identifiers, merchant owner data, credentials, tokens, or secrets. Unknown fields are rejected. Notes are scanned for Luhn-valid PAN-like sequences, labeled truncated-card references, authentication or bank data, email addresses, and common credential patterns. Unicode control characters that can hide or reorder displayed text are rejected.
 
 Automated screening reduces accidental disclosure; it cannot prove that arbitrary prose contains no personal or confidential information. A human must review any record before public release. Never use this repository or a public dataset mirror to upload a real merchant statement or a record containing merchant-identifying information.
 
