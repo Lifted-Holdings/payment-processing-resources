@@ -2,6 +2,15 @@
 
 All notable changes to the versioned dataset package are recorded here. Published release artifacts remain immutable.
 
+## 1.1.4 - 2026-08-03
+
+- Build the release ZIP from the declared manifest with fixed timestamps, stable ordering, fixed permissions, and stored members so clean builds produce identical bytes across platforms.
+- Extend published attestation to Kaggle and block stale metadata, divergent bundles, unexpected members, unsafe paths, symlinks, corrupt compression, or archive-byte disagreement.
+- Add a deterministic Kaggle distribution builder that stages only the exact release archive and SHA-256 sidecar while injecting the observed digest into public metadata.
+- Reject labeled, unlabeled, brand-masked, and first-six/last-five card references plus Unicode control characters that can obscure or reorder displayed audit notes or release text.
+- Require exact Zenodo, Kaggle, and Hugging Face inventories, tie Hugging Face downloads to its reported immutable commit, and run public-attestation, release-asset, and provenance regressions before publication.
+- Add registered hostile vectors and regression coverage for the new privacy, archive, compression, and mirror boundaries without changing schema 1.1.0.
+
 ## 1.1.3 - 2026-08-02
 
 - Split portable package validation from publication readiness so a tagless archive can never claim release provenance.

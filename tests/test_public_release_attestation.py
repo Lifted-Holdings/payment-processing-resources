@@ -35,8 +35,18 @@ class FakeTransport:
         del max_bytes
         return self.json_values[url]
 
+    def get_json_value(self, url, *, max_bytes):
+        del max_bytes
+        return self.json_values[url]
+
     def get_bytes(self, url, *, max_bytes):
         value = self.byte_values[url]
+        if len(value) > max_bytes:
+            raise ValueError("response_too_large")
+        return value
+
+    def post_bytes(self, url, document, *, max_bytes):
+        value = self.byte_values[(url, tuple(sorted(document.items())))]
         if len(value) > max_bytes:
             raise ValueError("response_too_large")
         return value
@@ -57,14 +67,19 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
         (self.root / "README.md").write_text("verified release\n", encoding="utf-8")
+        huggingface_readme = self.root / "distribution/huggingface/README.md"
+        huggingface_readme.parent.mkdir(parents=True)
+        huggingface_readme.write_bytes(
+            (ROOT / "distribution/huggingface/README.md").read_bytes()
+        )
         self.manifest = {
             "title": TITLE,
-            "version": "1.1.3",
+            "version": "1.1.4",
             "release_date": "2026-08-02",
             "version_doi": "10.5281/zenodo.99999999",
             "concept_doi": "10.5281/zenodo.21761714",
             "canonical_url": CANONICAL_URL,
-            "source_release": f"{SOURCE_REPOSITORY}/releases/tag/v1.1.3",
+            "source_release": f"{SOURCE_REPOSITORY}/releases/tag/v1.1.4",
             "license": "CC-BY-4.0",
             "files": ["README.md"],
         }
@@ -73,25 +88,26 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         self.temporary_directory.cleanup()
 
     def make_zip(self, members=None):
-        members = members or {"README.md": (self.root / "README.md").read_bytes()}
+        if members is None:
+            return self.attestation.build_archive_bytes(self.root, self.manifest)
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for name, value in members.items():
-                archive.writestr(f"payment-processing-resources-1.1.3/{name}", value)
+                archive.writestr(f"payment-processing-resources-1.1.4/{name}", value)
         return output.getvalue()
 
     def make_transport(self, archive=None):
         archive = archive or self.make_zip()
         digest = hashlib.sha256(archive).hexdigest()
-        zip_name = "lifted-payments-statement-audit-model-v1.1.3.zip"
+        zip_name = "lifted-payments-statement-audit-model-v1.1.4.zip"
         sidecar_name = "release-archive.sha256"
         github_zip = (
             f"https://github.com/Lifted-Holdings/payment-processing-resources/"
-            f"releases/download/v1.1.3/{zip_name}"
+            f"releases/download/v1.1.4/{zip_name}"
         )
         github_sidecar = (
             "https://github.com/Lifted-Holdings/payment-processing-resources/"
-            f"releases/download/v1.1.3/{sidecar_name}"
+            f"releases/download/v1.1.4/{sidecar_name}"
         )
         zenodo_zip = (
             f"https://zenodo.org/api/records/99999999/files/{zip_name}/content"
@@ -99,13 +115,32 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         zenodo_sidecar = (
             f"https://zenodo.org/api/records/99999999/files/{sidecar_name}/content"
         )
-        huggingface_zip = (
+        huggingface_prefix = (
             "https://huggingface.co/datasets/Liftedholdings/"
-            f"payment-statement-audit-model/resolve/main/{zip_name}"
+            f"payment-statement-audit-model/resolve/{'a' * 40}/"
         )
+        huggingface_zip = huggingface_prefix + zip_name
+        huggingface_sidecar = huggingface_prefix + sidecar_name
+        huggingface_readme = huggingface_prefix + "README.md"
+        kaggle_download = (
+            "https://api.kaggle.com/v1/"
+            "datasets.DatasetApiService/DownloadDataset"
+        )
+        kaggle_list = (
+            "https://www.kaggle.com/api/v1/datasets/list"
+            "?search=payment-statement-audit-model"
+        )
+        kaggle_version = 3
         sidecar = f"{digest}  {zip_name}\n".encode()
+        kaggle_bundle_buffer = io.BytesIO()
+        with zipfile.ZipFile(
+            kaggle_bundle_buffer, "w", compression=zipfile.ZIP_STORED
+        ) as kaggle_bundle:
+            kaggle_bundle.writestr(zip_name, archive)
+            kaggle_bundle.writestr(sidecar_name, sidecar)
+        kaggle_bundle = kaggle_bundle_buffer.getvalue()
         github = {
-            "tag_name": "v1.1.3",
+            "tag_name": "v1.1.4",
             "draft": False,
             "prerelease": False,
             "html_url": self.manifest["source_release"],
@@ -131,7 +166,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
             "metadata": {
                 "title": TITLE,
                 "publication_date": "2026-08-02",
-                "version": "1.1.3",
+                "version": "1.1.4",
                 "license": {"id": "cc-by-4.0"},
                 "related_identifiers": [
                     {"identifier": CANONICAL_URL, "relation": "isDocumentedBy"},
@@ -162,7 +197,11 @@ class PublicReleaseAttestationTests(unittest.TestCase):
             "private": False,
             "disabled": False,
             "gated": False,
-            "siblings": [{"rfilename": zip_name}],
+            "siblings": [
+                {"rfilename": "README.md"},
+                {"rfilename": zip_name},
+                {"rfilename": sidecar_name},
+            ],
         }
         snapshot_id = "c" * 40
         release_id = "d" * 40
@@ -180,9 +219,25 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
         transport = FakeTransport(
             json_values={
-                "https://api.github.com/repos/Lifted-Holdings/payment-processing-resources/releases/tags/v1.1.3": github,
+                "https://api.github.com/repos/Lifted-Holdings/payment-processing-resources/releases/tags/v1.1.4": github,
                 "https://zenodo.org/api/records/99999999": zenodo,
                 "https://huggingface.co/api/datasets/Liftedholdings/payment-statement-audit-model": huggingface,
+                kaggle_list: [
+                    {
+                        "ref": "liftedpayments/payment-statement-audit-model",
+                        "title": TITLE,
+                        "subtitle": "A processor-neutral statement-audit model with reproducible validation",
+                        "licenseName": "Attribution 4.0 International (CC BY 4.0)",
+                        "isPrivate": False,
+                        "currentVersionNumber": kaggle_version,
+                        "description": (
+                            "Version 1.1.4. "
+                            f"{self.manifest['version_doi']} "
+                            f"{self.manifest['source_release']} "
+                            f"{digest}"
+                        ),
+                    }
+                ],
                 software_heritage_visit: {
                     "origin": SOURCE_REPOSITORY,
                     "status": "full",
@@ -195,7 +250,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                             "target": expected_commit,
                             "target_type": "revision",
                         },
-                        "refs/tags/v1.1.3": {
+                        "refs/tags/v1.1.4": {
                             "target": release_id,
                             "target_type": "release",
                         },
@@ -203,7 +258,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 },
                 software_heritage_release: {
                     "id": release_id,
-                    "name": "v1.1.3",
+                    "name": "v1.1.4",
                     "target": expected_commit,
                     "target_type": "revision",
                 },
@@ -214,6 +269,20 @@ class PublicReleaseAttestationTests(unittest.TestCase):
                 zenodo_zip: archive,
                 zenodo_sidecar: sidecar,
                 huggingface_zip: archive,
+                huggingface_sidecar: sidecar,
+                huggingface_readme: (ROOT / "distribution/huggingface/README.md").read_bytes(),
+                (
+                    kaggle_download,
+                    tuple(
+                        sorted(
+                            {
+                                "ownerSlug": "liftedpayments",
+                                "datasetSlug": "payment-statement-audit-model",
+                                "datasetVersionNumber": kaggle_version,
+                            }.items()
+                        )
+                    ),
+                ): kaggle_bundle,
             },
             final_urls={
                 "https://doi.org/10.5281/zenodo.99999999": "https://zenodo.org/records/99999999"
@@ -221,7 +290,7 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         )
         return transport, digest, expected_commit, snapshot_id
 
-    def test_matching_github_zenodo_doi_and_huggingface_artifacts_verify(self):
+    def test_matching_public_archives_and_catalogs_verify(self):
         transport, digest, expected_commit, snapshot_id = self.make_transport()
 
         result = self.attestation.attest_public_release(
@@ -235,6 +304,72 @@ class PublicReleaseAttestationTests(unittest.TestCase):
         self.assertEqual((), result.failure_codes)
         self.assertEqual(digest, result.archive_sha256)
         self.assertEqual(snapshot_id, result.software_heritage_snapshot)
+        self.assertEqual(3, result.kaggle_version)
+
+    def test_stale_kaggle_version_blocks_attestation(self):
+        transport, _, expected_commit, _ = self.make_transport()
+        kaggle_list = next(
+            url for url in transport.json_values if "kaggle.com/api/v1/datasets/list" in url
+        )
+        transport.json_values[kaggle_list][0]["description"] = "Version 1.1.1"
+
+        result = self.attestation.attest_public_release(
+            self.root,
+            self.manifest,
+            transport=transport,
+            expected_commit=expected_commit,
+        )
+
+        self.assertFalse(result.verified)
+        self.assertIn("kaggle_release_invalid", result.failure_codes)
+
+    def test_extra_zenodo_or_huggingface_files_block_attestation(self):
+        for provider in ("zenodo", "huggingface"):
+            with self.subTest(provider=provider):
+                transport, _, expected_commit, _ = self.make_transport()
+                if provider == "zenodo":
+                    record = transport.json_values[
+                        "https://zenodo.org/api/records/99999999"
+                    ]
+                    record["files"].append({"key": "untracked.exe"})
+                    expected_failure = "zenodo_release_invalid"
+                else:
+                    dataset = transport.json_values[
+                        "https://huggingface.co/api/datasets/"
+                        "Liftedholdings/payment-statement-audit-model"
+                    ]
+                    dataset["siblings"].append({"rfilename": "untracked.exe"})
+                    expected_failure = "huggingface_release_invalid"
+
+                result = self.attestation.attest_public_release(
+                    self.root,
+                    self.manifest,
+                    transport=transport,
+                    expected_commit=expected_commit,
+                )
+                self.assertFalse(result.verified)
+                self.assertIn(expected_failure, result.failure_codes)
+
+    def test_corrupt_deflated_kaggle_bundle_fails_closed(self):
+        zip_name = "lifted-payments-statement-audit-model-v1.1.4.zip"
+        sidecar_name = "release-archive.sha256"
+        archive = self.make_zip()
+        sidecar = b"0" * 64 + b"  " + zip_name.encode() + b"\n"
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr(zip_name, archive)
+            bundle.writestr(sidecar_name, sidecar)
+        corrupted = bytearray(output.getvalue())
+        with zipfile.ZipFile(io.BytesIO(corrupted)) as bundle:
+            first = bundle.infolist()[0]
+            offset = first.header_offset + 30 + len(first.filename.encode()) + len(first.extra)
+        corrupted[offset + 2] ^= 0xFF
+
+        self.assertFalse(
+            self.attestation._kaggle_bundle_matches(
+                bytes(corrupted), archive, sidecar, zip_name, sidecar_name
+            )
+        )
 
     def test_digest_mismatch_blocks_attestation(self):
         transport, _, expected_commit, _ = self.make_transport()

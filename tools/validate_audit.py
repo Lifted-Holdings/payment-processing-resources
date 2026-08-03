@@ -8,6 +8,7 @@ import csv
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import (
@@ -28,7 +29,7 @@ from jsonschema import Draft202012Validator, FormatChecker, validators
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema/payment-statement-audit.schema.json"
-VALIDATOR_VERSION = "1.1.3"
+VALIDATOR_VERSION = "1.1.4"
 VALIDATION_DEPENDENCIES = (
     "attrs",
     "jsonschema",
@@ -104,6 +105,25 @@ _AUTHENTICATION_LABEL = re.compile(
 )
 _BANK_VALUE = re.compile(
     r"\b(?:routing|account)(?:\s*(?:number|no))?\b[^\r\n\d]{0,12}\d{4,}",
+    re.I,
+)
+_TRUNCATED_PAN = re.compile(
+    r"\b(?:card(?:\s*(?:number|no))?|pan|account|acct|visa|mastercard|amex|discover)\b"
+    r"[^\r\n]{0,32}?(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4)"
+    r"(?:\s+digits?)?|[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6 -]{2,})"
+    r"\s*\d{4}\b",
+    re.I,
+)
+_UNLABELED_TRUNCATED_PAN = re.compile(
+    r"(?:\b(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4|five|5)"
+    r"(?:\s+digits?)?)\b[^\r\n\d]{0,16}\d{4,5}\b|"
+    r"(?<![\w\d])(?:[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6][ -]?){4,}"
+    r"\d{4,6}(?!\d)|"
+    r"(?<!\d)\d{6}[ -]?(?:[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6][ -]?){2,}"
+    r"\d{4,5}(?!\d)|"
+    r"\bfirst\s+(?:six|6)(?:\s+digits?)?\b[^\r\n\d]{0,16}\d{6}\b"
+    r"[^\r\n]{0,32}?\blast\s+(?:four|4|five|5)(?:\s+digits?)?\b"
+    r"[^\r\n\d]{0,16}\d{4,5}\b)",
     re.I,
 )
 _LABELED_CREDENTIAL = re.compile(
@@ -341,10 +361,19 @@ def _string_contains_prohibited_data(value: str) -> bool:
     if (
         _AUTHENTICATION_LABEL.search(value)
         or _BANK_VALUE.search(value)
+        or _TRUNCATED_PAN.search(value)
+        or _UNLABELED_TRUNCATED_PAN.search(value)
         or _LABELED_CREDENTIAL.search(value)
     ):
         return True
     return False
+
+
+def _string_contains_unsafe_text_control(value: str) -> bool:
+    return any(
+        character not in "\t\n\r" and unicodedata.category(character) in {"Cc", "Cf"}
+        for character in value
+    )
 
 
 def _privacy_issues(value: Any, path: tuple[Any, ...] = ()) -> list[ValidationIssue]:
@@ -364,14 +393,23 @@ def _privacy_issues(value: Any, path: tuple[Any, ...] = ()) -> list[ValidationIs
     elif isinstance(value, list):
         for index, child in enumerate(value):
             issues.extend(_privacy_issues(child, (*path, index)))
-    elif isinstance(value, str) and _string_contains_prohibited_data(value):
-        issues.append(
-            ValidationIssue(
-                "prohibited_payment_data",
-                _pointer(path),
-                "Text may contain prohibited payment, identity, bank, or credential data.",
+    elif isinstance(value, str):
+        if _string_contains_prohibited_data(value):
+            issues.append(
+                ValidationIssue(
+                    "prohibited_payment_data",
+                    _pointer(path),
+                    "Text may contain prohibited payment, identity, bank, or credential data.",
+                )
             )
-        )
+        if _string_contains_unsafe_text_control(value):
+            issues.append(
+                ValidationIssue(
+                    "unsafe_text_control",
+                    _pointer(path),
+                    "Text contains a control character that can obscure or reorder displayed content.",
+                )
+            )
     return issues
 
 
