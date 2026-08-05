@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.2.0",
+  "calculation_basis": "gross_settled_purchase_volume_and_net_processing_fees",
+  "statement_period": {
+    "start": "2026-06-01",
+    "end": "2026-06-30"
+  },
+  "currency": "USD",
+  "comparable": true,
+  "volume_disclosed": true,
+  "card_volume": 1.0,
+  "transaction_count": 1,
+  "gross_processing_fees": 45.0,
+  "statement_credits": 0.0,
+  "total_processing_fees": 45.0,
+  "effective_rate": 45.0,
+  "average_ticket": 1.0,
+  "pricing_model": "flat_rate",
+  "fee_groups": [
+    {
+      "category": "monthly",
+      "amount": 45.0
+    }
+  ]
+}

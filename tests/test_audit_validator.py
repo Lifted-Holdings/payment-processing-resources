@@ -69,7 +69,9 @@ class AuditValidatorTests(unittest.TestCase):
         self.assertIn("period_order", self.issue_codes(reversed_record))
         self.assertIn("period_duration", self.issue_codes(overlong_record))
 
-    def test_invalid_calendar_dates_are_rejected_even_when_schema_format_is_annotation(self):
+    def test_invalid_calendar_dates_are_rejected_even_when_schema_format_is_annotation(
+        self,
+    ):
         record = self.mutated(
             lambda row: row["statement_period"].update({"end": "2026-02-30"})
         )
@@ -140,9 +142,11 @@ class AuditValidatorTests(unittest.TestCase):
                     "total_processing_fees": Decimal("49.00"),
                     "effective_rate": None,
                     "average_ticket": None,
-                    "fee_groups": [
-                        {"category": "monthly", "amount": Decimal("49.00")}
-                    ],
+                    # 1.2.0: a month with no settled volume has no rate to compare,
+                    # so it must say so rather than being silently ranked against
+                    # months that do.
+                    "comparable": False,
+                    "fee_groups": [{"category": "monthly", "amount": Decimal("49.00")}],
                 }
             )
         )
@@ -164,9 +168,8 @@ class AuditValidatorTests(unittest.TestCase):
                     "total_processing_fees": Decimal("0.00"),
                     "effective_rate": None,
                     "average_ticket": None,
-                    "fee_groups": [
-                        {"category": "other", "amount": Decimal("0.00")}
-                    ],
+                    "comparable": False,
+                    "fee_groups": [{"category": "other", "amount": Decimal("0.00")}],
                 }
             )
         )
@@ -183,9 +186,7 @@ class AuditValidatorTests(unittest.TestCase):
                     "total_processing_fees": Decimal("0.00"),
                     "effective_rate": Decimal("0.000000"),
                     "average_ticket": Decimal("0.01"),
-                    "fee_groups": [
-                        {"category": "other", "amount": Decimal("0.00")}
-                    ],
+                    "fee_groups": [{"category": "other", "amount": Decimal("0.00")}],
                 }
             )
         )
@@ -199,9 +200,7 @@ class AuditValidatorTests(unittest.TestCase):
                     "total_processing_fees": Decimal("0.01"),
                     "effective_rate": Decimal("0.000001"),
                     "average_ticket": Decimal("20000.00"),
-                    "fee_groups": [
-                        {"category": "other", "amount": Decimal("0.01")}
-                    ],
+                    "fee_groups": [{"category": "other", "amount": Decimal("0.01")}],
                 }
             )
         )
@@ -276,9 +275,7 @@ class AuditValidatorTests(unittest.TestCase):
                 {"review_notes": ["Card number 4111 1111 1111 1111"]}
             )
         )
-        cvv = self.mutated(
-            lambda row: row.update({"review_notes": ["CVV 123"]})
-        )
+        cvv = self.mutated(lambda row: row.update({"review_notes": ["CVV 123"]}))
         self.assertIn("prohibited_payment_data", self.issue_codes(pan))
         self.assertIn("prohibited_payment_data", self.issue_codes(cvv))
 
@@ -339,9 +336,7 @@ class AuditValidatorTests(unittest.TestCase):
     def test_unknown_field_names_never_leak_through_issue_paths(self):
         sensitive_key = "password_SUPERSECRET_12345"
         record = {sensitive_key: Decimal("1e999999")}
-        rendered = json.dumps(
-            self.validator.validation_result(record), sort_keys=True
-        )
+        rendered = json.dumps(self.validator.validation_result(record), sort_keys=True)
         self.assertNotIn(sensitive_key, rendered)
         self.assertIn("/_unknown", rendered)
 
@@ -364,14 +359,12 @@ class AuditValidatorTests(unittest.TestCase):
             with self.subTest(prefix=marker[0]):
                 with tempfile.TemporaryDirectory() as directory:
                     candidate = Path(directory) / "statement.csv"
-                    source = (
-                        ROOT / "payment-statement-audit-template.csv"
-                    ).read_text(encoding="utf-8")
+                    source = (ROOT / "payment-statement-audit-template.csv").read_text(
+                        encoding="utf-8"
+                    )
                     lines = source.splitlines()
                     lines[1] = lines[1].rsplit(",", maxsplit=1)[0] + "," + marker
-                    candidate.write_text(
-                        "\n".join(lines) + "\n", encoding="utf-8"
-                    )
+                    candidate.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
                     issues = self.validator.validate_csv_template(candidate)
                     self.assertIn("csv_formula", {issue.code for issue in issues})
@@ -407,7 +400,9 @@ class AuditValidatorTests(unittest.TestCase):
         }
         self.assertEqual(report["dependency_versions"], pins)
 
-    def test_cli_returns_nonzero_and_machine_readable_safe_output_for_invalid_input(self):
+    def test_cli_returns_nonzero_and_machine_readable_safe_output_for_invalid_input(
+        self,
+    ):
         invalid_path = ROOT / "test-vectors/invalid/security-data-in-note.json"
         result = subprocess.run(
             [sys.executable, str(VALIDATOR_PATH), "--json", str(invalid_path)],

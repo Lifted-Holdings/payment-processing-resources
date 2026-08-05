@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.2.0",
+  "calculation_basis": "gross_settled_purchase_volume_and_net_processing_fees",
+  "statement_period": {
+    "start": "2026-06-01",
+    "end": "2026-06-30"
+  },
+  "currency": "USD",
+  "comparable": true,
+  "volume_disclosed": true,
+  "card_volume": 90000.0,
+  "transaction_count": 1500,
+  "gross_processing_fees": 2950.0,
+  "statement_credits": 0.0,
+  "total_processing_fees": 2950.0,
+  "effective_rate": 0.032778,
+  "average_ticket": 60.0,
+  "pricing_model": "interchange_plus",
+  "non_recurring_fees": 1450.0,
+  "recurring_effective_rate": 0.016667,
+  "fee_groups": [
+    {
+      "category": "interchange",
+      "amount": 1000.0
+    },
+    {
+      "category": "assessments",
+      "amount": 150.0
+    },
+    {
+      "category": "processor_markup",
+      "amount": 300.0
+    },
+    {
+      "category": "monthly",
+      "amount": 50.0
+    },
+    {
+      "category": "other",
+      "amount": 1450.0,
+      "combined": true,
+      "notes": "Annual registration and membership charges; the source combined them with unclassified processing costs."
+    }
+  ],
+  "review_notes": [
+    "Synthetic validation vector only."
+  ]
+}

@@ -29,7 +29,7 @@ from jsonschema import Draft202012Validator, FormatChecker, validators
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema/payment-statement-audit.schema.json"
-VALIDATOR_VERSION = "1.1.7"
+VALIDATOR_VERSION = "1.2.0"
 VALIDATION_DEPENDENCIES = (
     "attrs",
     "jsonschema",
@@ -46,6 +46,10 @@ MAX_NUMBER_TOKEN_CHARS = 64
 MONEY_QUANTUM = Decimal("0.01")
 RATE_QUANTUM = Decimal("0.000001")
 MONEY_MAXIMUM = Decimal("999999999999.99")
+# Above this, the month is arithmetically true but uninformative: fixed fees dominate a
+# trivial volume and the rate says nothing about pricing. Observed across a real portfolio
+# in 17% of statements, topping out above 8000%. Such a record must not claim comparability.
+RATE_COMPARABLE_MAXIMUM = Decimal("1")
 FEE_CATEGORIES = (
     "interchange",
     "assessments",
@@ -55,21 +59,30 @@ FEE_CATEGORIES = (
     "pci",
     "equipment",
     "chargebacks",
+    "blended_discount",
     "other",
 )
 SAFE_PATH_KEYS = {
+    "amex_acceptance",
     "amount",
     "average_ticket",
     "calculation_basis",
     "card_volume",
+    "cardholder_funded_fees",
     "category",
+    "combined",
+    "comparable",
     "currency",
     "effective_rate",
     "end",
     "fee_groups",
     "gross_processing_fees",
+    "merchant_borne_processing_fees",
+    "net_cost_of_acceptance_rate",
+    "non_recurring_fees",
     "notes",
     "pricing_model",
+    "recurring_effective_rate",
     "review_notes",
     "schema_version",
     "start",
@@ -77,6 +90,7 @@ SAFE_PATH_KEYS = {
     "statement_period",
     "total_processing_fees",
     "transaction_count",
+    "volume_disclosed",
 }
 CSV_HEADER = (
     "schema_version",
@@ -93,8 +107,22 @@ CSV_HEADER = (
     "average_ticket",
     "pricing_model",
     *FEE_CATEGORIES,
+    "amex_acceptance",
+    "comparable",
+    "volume_disclosed",
+    "cardholder_funded_fees",
+    "merchant_borne_processing_fees",
+    "net_cost_of_acceptance_rate",
+    "non_recurring_fees",
+    "recurring_effective_rate",
     "notes",
 )
+CSV_OPTIONAL_MONEY = (
+    "cardholder_funded_fees",
+    "merchant_borne_processing_fees",
+    "non_recurring_fees",
+)
+CSV_OPTIONAL_RATE = ("net_cost_of_acceptance_rate", "recurring_effective_rate")
 
 _PAN_CANDIDATE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
 _SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
@@ -131,9 +159,7 @@ _LABELED_CREDENTIAL = re.compile(
     r"\s*(?::|=|is)\s*[A-Za-z0-9_-]{3,}",
     re.I,
 )
-_CREDENTIAL = re.compile(
-    r"\b(?:sk|pk|ghp|github_pat|hf)_[A-Za-z0-9_-]{12,}\b", re.I
-)
+_CREDENTIAL = re.compile(r"\b(?:sk|pk|ghp|github_pat|hf)_[A-Za-z0-9_-]{12,}\b", re.I)
 _PROHIBITED_KEY = re.compile(
     r"(?:pan|card_?number|cvv|cvc|security_?code|pin_?block|routing_?number|"
     r"bank_?account|account_?number|ssn|password|api_?key|secret|token)",
@@ -304,6 +330,20 @@ def _money_decimal(value: Any) -> Decimal | None:
     if (
         number is None
         or number < 0
+        or number > MONEY_MAXIMUM
+        or number.as_tuple().exponent < -2
+    ):
+        return None
+    return number
+
+
+def _signed_money_decimal(value: Any) -> Decimal | None:
+    """Like _money_decimal but admits negatives, for the one field where a dual-price
+    program can legitimately over-recover the merchant's processing cost."""
+    number = _decimal(value)
+    if (
+        number is None
+        or number < -MONEY_MAXIMUM
         or number > MONEY_MAXIMUM
         or number.as_tuple().exponent < -2
     ):
@@ -495,8 +535,15 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
             if isinstance(group, dict)
         ]
         gross = _money_decimal(record.get("gross_processing_fees"))
-        if gross is not None and amounts and all(amount is not None for amount in amounts):
-            if sum((amount for amount in amounts if amount is not None), Decimal("0")) != gross:
+        if (
+            gross is not None
+            and amounts
+            and all(amount is not None for amount in amounts)
+        ):
+            if (
+                sum((amount for amount in amounts if amount is not None), Decimal("0"))
+                != gross
+            ):
                 issues.append(
                     ValidationIssue(
                         "fee_group_reconciliation",
@@ -542,7 +589,9 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
                 )
         elif net is not None:
             observed_rate = _decimal(rate)
-            expected_rate = (net / volume).quantize(RATE_QUANTUM, rounding=ROUND_HALF_UP)
+            expected_rate = (net / volume).quantize(
+                RATE_QUANTUM, rounding=ROUND_HALF_UP
+            )
             if observed_rate != expected_rate:
                 issues.append(
                     ValidationIssue(
@@ -576,6 +625,230 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
                     )
                 )
 
+    issues.extend(_contract_120_issues(record, volume=volume, rate=rate))
+    return issues
+
+
+def _contract_120_issues(
+    record: dict[str, Any], *, volume: Decimal | None, rate: Any
+) -> list[ValidationIssue]:
+    """Rules for the fields the 1.2.0 record contract adds.
+
+    Every one of these exists because a real acquirer statement broke the 1.1.0 contract:
+    a dual-priced account whose cardholder-funded offset had nowhere to go and could be
+    read two ways for a 115x spread; dormant months emitting four-digit percentages; and
+    annual charges silently inflating a single month's rate.
+    """
+    issues: list[ValidationIssue] = []
+    for name in ("comparable", "volume_disclosed"):
+        if not isinstance(record.get(name), bool):
+            issues.append(
+                ValidationIssue(
+                    "missing_disclosure_flag",
+                    f"/{name}",
+                    "A 1.2.0 record must state this boolean explicitly.",
+                )
+            )
+
+    # --- cardholder-funded fees -------------------------------------------------
+    funded_present = "cardholder_funded_fees" in record
+    if record.get("pricing_model") == "dual_pricing" and not funded_present:
+        issues.append(
+            ValidationIssue(
+                "dual_pricing_offset_required",
+                "/cardholder_funded_fees",
+                "A dual_pricing record must state cardholder_funded_fees, using 0.00 with a note when none were collected.",
+            )
+        )
+
+    borne = record.get("merchant_borne_processing_fees")
+    acceptance = record.get("net_cost_of_acceptance_rate")
+    if funded_present:
+        funded = _money_decimal(record.get("cardholder_funded_fees"))
+        net = _money_decimal(record.get("total_processing_fees"))
+        borne_value = _signed_money_decimal(borne)
+        if funded is None:
+            issues.append(
+                ValidationIssue(
+                    "money_precision",
+                    "/cardholder_funded_fees",
+                    "USD amounts must use no more than two decimal places.",
+                )
+            )
+        if borne_value is None:
+            issues.append(
+                ValidationIssue(
+                    "missing_derived_field",
+                    "/merchant_borne_processing_fees",
+                    "cardholder_funded_fees requires merchant_borne_processing_fees.",
+                )
+            )
+        if "net_cost_of_acceptance_rate" not in record:
+            issues.append(
+                ValidationIssue(
+                    "missing_derived_field",
+                    "/net_cost_of_acceptance_rate",
+                    "cardholder_funded_fees requires net_cost_of_acceptance_rate.",
+                )
+            )
+        if funded is not None and volume is not None and funded > volume:
+            issues.append(
+                ValidationIssue(
+                    "offset_exceeds_volume",
+                    "/cardholder_funded_fees",
+                    "Cardholder-funded fees are settled inside card volume and cannot exceed it.",
+                )
+            )
+        if funded is not None and net is not None and borne_value is not None:
+            if net - funded != borne_value:
+                issues.append(
+                    ValidationIssue(
+                        "merchant_borne_reconciliation",
+                        "/merchant_borne_processing_fees",
+                        "Merchant-borne fees must exactly equal net processing fees minus cardholder-funded fees.",
+                    )
+                )
+            base = None if volume is None else volume - funded
+            observed = _decimal(acceptance)
+            if base is not None and base > 0:
+                expected = (borne_value / base).quantize(
+                    RATE_QUANTUM, rounding=ROUND_HALF_UP
+                )
+                if observed != expected:
+                    issues.append(
+                        ValidationIssue(
+                            "acceptance_rate_mismatch",
+                            "/net_cost_of_acceptance_rate",
+                            "Net cost of acceptance does not match merchant-borne fees divided by merchant-retained volume.",
+                        )
+                    )
+            elif base is not None and acceptance is not None:
+                issues.append(
+                    ValidationIssue(
+                        "zero_base_acceptance_rate",
+                        "/net_cost_of_acceptance_rate",
+                        "Net cost of acceptance must be null when card volume net of cardholder-funded fees is zero.",
+                    )
+                )
+    else:
+        for name, value in (
+            ("merchant_borne_processing_fees", borne),
+            ("net_cost_of_acceptance_rate", acceptance),
+        ):
+            if name in record:
+                issues.append(
+                    ValidationIssue(
+                        "orphan_derived_field",
+                        f"/{name}",
+                        "This field requires cardholder_funded_fees.",
+                    )
+                )
+            del value
+
+    # --- non-recurring fees -----------------------------------------------------
+    if "non_recurring_fees" in record:
+        annual = _money_decimal(record.get("non_recurring_fees"))
+        gross = _money_decimal(record.get("gross_processing_fees"))
+        net = _money_decimal(record.get("total_processing_fees"))
+        recurring = record.get("recurring_effective_rate")
+        if annual is None:
+            issues.append(
+                ValidationIssue(
+                    "money_precision",
+                    "/non_recurring_fees",
+                    "USD amounts must use no more than two decimal places.",
+                )
+            )
+        if "recurring_effective_rate" not in record:
+            issues.append(
+                ValidationIssue(
+                    "missing_derived_field",
+                    "/recurring_effective_rate",
+                    "non_recurring_fees requires recurring_effective_rate.",
+                )
+            )
+        if annual is not None and gross is not None and annual > gross:
+            issues.append(
+                ValidationIssue(
+                    "non_recurring_exceeds_gross",
+                    "/non_recurring_fees",
+                    "Non-recurring fees are part of gross processing fees and cannot exceed them.",
+                )
+            )
+        if annual is not None and net is not None and volume is not None:
+            if volume > 0:
+                expected = ((net - annual) / volume).quantize(
+                    RATE_QUANTUM, rounding=ROUND_HALF_UP
+                )
+                if _decimal(recurring) != expected:
+                    issues.append(
+                        ValidationIssue(
+                            "recurring_rate_mismatch",
+                            "/recurring_effective_rate",
+                            "Recurring effective rate does not match net fees less non-recurring fees divided by card volume.",
+                        )
+                    )
+            elif recurring is not None:
+                issues.append(
+                    ValidationIssue(
+                        "zero_volume_rate",
+                        "/recurring_effective_rate",
+                        "Recurring effective rate must be null when card volume is zero.",
+                    )
+                )
+    elif "recurring_effective_rate" in record:
+        issues.append(
+            ValidationIssue(
+                "orphan_derived_field",
+                "/recurring_effective_rate",
+                "This field requires non_recurring_fees.",
+            )
+        )
+
+    # --- comparability ----------------------------------------------------------
+    comparable = record.get("comparable")
+    disclosed = record.get("volume_disclosed")
+    if comparable is True:
+        reason = None
+        if disclosed is False:
+            reason = "A record whose source did not disclose settled volume cannot claim comparability."
+        elif volume is not None and volume == 0:
+            reason = "A zero-volume record cannot claim comparability."
+        else:
+            observed = _decimal(rate)
+            if observed is not None and observed > RATE_COMPARABLE_MAXIMUM:
+                reason = "An effective rate above 100 percent is dominated by fixed fees and cannot claim comparability."
+        if reason is not None:
+            issues.append(ValidationIssue("not_comparable", "/comparable", reason))
+    if disclosed is False and volume is not None and volume != 0:
+        issues.append(
+            ValidationIssue(
+                "undisclosed_volume_nonzero",
+                "/card_volume",
+                "Card volume must be 0.00 when the source statement disclosed no settled volume total.",
+            )
+        )
+
+    groups = record.get("fee_groups")
+    if isinstance(groups, list):
+        for index, group in enumerate(groups):
+            if not isinstance(group, dict):
+                continue
+            # blended_discount exists only because the source fused interchange,
+            # assessments and markup into one undecomposable line, so it carries the
+            # same disclosure duty as an explicitly combined bucket.
+            fused = (
+                group.get("combined") is True
+                or group.get("category") == "blended_discount"
+            )
+            if fused and not isinstance(group.get("notes"), str):
+                issues.append(
+                    ValidationIssue(
+                        "combined_group_requires_note",
+                        f"/fee_groups/{index}/notes",
+                        "A combined fee group must name what the source statement merged into it.",
+                    )
+                )
     return issues
 
 
@@ -611,12 +884,25 @@ def validation_result(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _csv_boolean(value: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    raise ValueError("boolean column must be true or false")
+
+
 def _record_from_csv(row: dict[str, str]) -> dict[str, Any]:
     groups = []
     for category in FEE_CATEGORIES:
         amount = Decimal(row[category])
         if amount != 0:
-            groups.append({"category": category, "amount": amount})
+            group: dict[str, Any] = {"category": category, "amount": amount}
+            # The flat template has one notes column and no per-group notes, so a
+            # blended discount — which must always say what the source fused into it —
+            # borrows that column rather than being unrepresentable in CSV.
+            if category == "blended_discount" and row.get("notes"):
+                group["notes"] = row["notes"]
+            groups.append(group)
     return {
         "schema_version": row["schema_version"],
         "calculation_basis": row["calculation_basis"],
@@ -639,7 +925,32 @@ def _record_from_csv(row: dict[str, str]) -> dict[str, Any]:
         "pricing_model": row["pricing_model"],
         "fee_groups": groups or [{"category": "other", "amount": Decimal("0.00")}],
         "review_notes": [row["notes"]] if row["notes"] else [],
+        **_csv_120_fields(row),
     }
+
+
+def _csv_120_fields(row: dict[str, str]) -> dict[str, Any]:
+    """The 1.2.0 columns, omitted entirely for a 1.1.0 row so the older flat contract
+    keeps validating unchanged. A blank optional cell means absent; the literal `null`
+    means present-and-null, which a nullable derived rate legitimately needs."""
+    if row.get("schema_version") != "1.2.0":
+        return {}
+    fields: dict[str, Any] = {
+        "comparable": _csv_boolean(row["comparable"]),
+        "volume_disclosed": _csv_boolean(row["volume_disclosed"]),
+    }
+    if row.get("amex_acceptance"):
+        fields["amex_acceptance"] = row["amex_acceptance"]
+    for name in CSV_OPTIONAL_MONEY:
+        if row.get(name):
+            fields[name] = Decimal(row[name])
+    for name in CSV_OPTIONAL_RATE:
+        value = (row.get(name) or "").strip()
+        if value.lower() == "null":
+            fields[name] = None
+        elif value:
+            fields[name] = Decimal(value)
+    return fields
 
 
 def validate_csv_template(path: Path | str) -> list[ValidationIssue]:
@@ -720,16 +1031,16 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
         try:
             issues = validate_record(load_record(path))
         except ValueError:
-            issues = [ValidationIssue("parse_error", "/", "Record could not be parsed.")]
+            issues = [
+                ValidationIssue("parse_error", "/", "Record could not be parsed.")
+            ]
         if issues:
             unexpected.append({"file": path.name, "result": "unexpected_invalid"})
 
     invalid_dir = root / "test-vectors/invalid"
     invalid_files = {path.name for path in invalid_dir.glob("*.json")}
     if invalid_files != set(invalid_expectations):
-        unexpected.append(
-            {"file": "invalid-corpus", "result": "inventory_mismatch"}
-        )
+        unexpected.append({"file": "invalid-corpus", "result": "inventory_mismatch"})
     for filename, expected_codes in sorted(invalid_expectations.items()):
         path = invalid_dir / filename
         try:
@@ -737,11 +1048,15 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
         except (OSError, UnicodeError, ValueError) as exc:
             observed = {str(exc).split(":", maxsplit=1)[0]}
         if not set(expected_codes).issubset(observed):
-            unexpected.append({"file": filename, "result": "expected_rule_not_observed"})
+            unexpected.append(
+                {"file": filename, "result": "expected_rule_not_observed"}
+            )
 
     csv_issues = validate_csv_template(root / "payment-statement-audit-template.csv")
     if csv_issues:
-        unexpected.append({"file": "payment-statement-audit-template.csv", "result": "invalid"})
+        unexpected.append(
+            {"file": "payment-statement-audit-template.csv", "result": "invalid"}
+        )
 
     return {
         "report_version": "1.0",
@@ -762,7 +1077,7 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate a schema v1.1.0 Lifted Payments statement-audit JSON record."
+        description="Validate a schema v1.1.0 or v1.2.0 Lifted Payments statement-audit JSON record."
     )
     parser.add_argument("path", nargs="?", type=Path)
     parser.add_argument("--json", action="store_true", dest="as_json")
@@ -785,15 +1100,20 @@ def main(argv: list[str] | None = None) -> int:
             code = "input_read"
         else:
             candidate = str(exc).split(":", maxsplit=1)[0]
-            code = candidate if candidate in {
-                "duplicate_key",
-                "input_depth",
-                "input_size",
-                "invalid_json",
-                "invalid_root",
-                "non_finite_number",
-                "number_range",
-            } else "invalid_json"
+            code = (
+                candidate
+                if candidate
+                in {
+                    "duplicate_key",
+                    "input_depth",
+                    "input_size",
+                    "invalid_json",
+                    "invalid_root",
+                    "non_finite_number",
+                    "number_range",
+                }
+                else "invalid_json"
+            )
         report = {
             "validator_version": VALIDATOR_VERSION,
             "status": "invalid",
@@ -809,7 +1129,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.as_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     elif report["status"] == "valid":
-        print("VALID: record satisfies the schema v1.1.0 structural, accounting, and privacy rules.")
+        print(
+            "VALID: record satisfies the schema v1.1.0 structural, accounting, and privacy rules."
+        )
     else:
         print(f"INVALID: {report['issue_count']} rule violation(s).")
         for issue in report["issues"]:
