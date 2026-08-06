@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from decimal import Decimal, Inexact, localcontext
 from pathlib import Path
@@ -308,6 +309,240 @@ class AuditValidatorTests(unittest.TestCase):
                     )
                 )
                 self.assertIn("unsafe_text_control", self.issue_codes(record))
+
+    def test_pan_screening_survives_separator_and_lookalike_obfuscation(self):
+        """Each of these read as clean before NFKC folding and windowed Luhn.
+
+        4111 1111 1111 1111 is the published synthetic test PAN; every form
+        below is that same number, re-spelled the way a statement PDF, a
+        spreadsheet paste, or a deliberate evasion would spell it.
+
+        The obfuscating code points are written as escapes rather than literals
+        so this file stays ASCII. The publication gate scans every declared
+        release asset for format and control characters, and a literal U+200B
+        here blocks the release from inside its own regression suite.
+        """
+        obfuscated = (
+            ("non_breaking_space", "Card 4111\u00a01111\u00a01111\u00a01111 noted"),
+            ("narrow_no_break_space", "Card 4111\u202f1111\u202f1111\u202f1111 noted"),
+            ("thin_space", "Card 4111\u20091111\u20091111\u20091111 noted"),
+            ("zero_width_space", "Card 4111\u200b1111\u200b1111\u200b1111 noted"),
+            # Tab and newline are the two separators a spreadsheet or PDF paste
+            # is most likely to leave behind, and are the control characters a
+            # note is otherwise allowed to contain.
+            ("tab_separator", "Card 4111\t1111\t1111\t1111 noted"),
+            ("newline_separator", "Card 4111\n1111\n1111\n1111 noted"),
+            ("dot_separator", "Card 4111.1111.1111.1111 noted"),
+            ("middot_separator", "Card 4111\u00b71111\u00b71111\u00b71111 noted"),
+            ("trailing_expiry_digits", "Card 41111111111111110126 noted"),
+            ("leading_digits", "Ref 99994111111111111111 noted"),
+            ("circled_digits", "Card \u2463" + "\u2460" * 15 + " noted"),
+            ("superscript_digits", "Card \u2074\u00b9\u00b9\u00b9111111111111 noted"),
+            ("fullwidth_digits", "Card \uff14\uff11\uff11\uff11111111111111 noted"),
+        )
+        for label, note in obfuscated:
+            with self.subTest(obfuscation=label):
+                record = self.mutated(
+                    lambda row, value=note: row.update({"review_notes": [value]})
+                )
+                self.assertIn("prohibited_payment_data", self.issue_codes(record))
+
+        # The separator and window widening must not disturb the plain forms.
+        for note in ("Card 4111 1111 1111 1111", "Card 4111-1111-1111-1111"):
+            with self.subTest(note=note):
+                record = self.mutated(
+                    lambda row, value=note: row.update({"review_notes": [value]})
+                )
+                self.assertIn("prohibited_payment_data", self.issue_codes(record))
+
+    def test_privacy_screening_is_linear_in_the_length_of_the_text(self):
+        """The mask quantifiers were unbounded, so backtracking was quadratic.
+
+        Measured on the pristine tree: 61 ms at n=2000, 262 ms at n=4000 and
+        1009 ms at n=8000 for an all-asterisk note, which extrapolates to hours
+        for an in-limit one-megabyte record. Growth is asserted rather than a
+        wall-clock bound so the test does not turn into a machine-speed probe.
+        """
+        screen = self.validator._string_contains_prohibited_data
+        for label, filler in (
+            ("mask_run", "*"),
+            ("card_label_then_spaces", " "),
+            ("dots", "."),
+            ("digits", "7"),
+            ("middots", "\u00b7"),
+        ):
+            timings = {}
+            for size in (8_000, 64_000):
+                text = filler * size
+                if label == "card_label_then_spaces":
+                    text = "card " + text
+                # Best of three: the smallest sample is the least polluted by
+                # scheduling noise on a shared machine.
+                timings[size] = min(self._elapsed_ms(screen, text) for _ in range(3))
+            growth = timings[64_000] / max(timings[8_000], 0.05)
+            with self.subTest(filler=label, timings=timings, growth=growth):
+                # Linear would be 8x for an 8x input; quadratic would be 64x.
+                self.assertLess(growth, 24.0)
+
+    @staticmethod
+    def _elapsed_ms(function, argument):
+        start = time.perf_counter()
+        function(argument)
+        return (time.perf_counter() - start) * 1000
+
+    def test_ordinary_audit_prose_is_not_screened_as_payment_data(self):
+        """An ending phrase near a calendar year is a reporting period.
+
+        Every note below was rejected as prohibited payment data before this
+        change, which pushes analysts toward deleting legitimate explanations.
+        """
+        permitted = (
+            "Reclassified the card fee for the period ending in 2026",
+            "Account reconciliation completed for the quarter ending in 2025",
+            "Card present volume for the cycle ending in 2024 was restated",
+            "PCI fee ends in 2026 per the acquirer schedule",
+            "Visa assessments for the month ending in 2026",
+            "Reviewed the account ending in 2026 fiscal year",
+            "Cardholder funded fees for the period ending in 2026 were 1,240.00",
+            "Dual pricing program ended in 2025; discount rate ends in 2026",
+            "Interchange 1,234.56, assessments 7,890.12, markup 3,456.78",
+            "Gross 125,431.90 net 2,864.75 credits 0.00 for the cycle",
+            "Volume 1,000,000.00 across 14,882 transactions at 2.29 percent",
+            "Monthly 49.00 PCI 19.95 equipment 35.00 gateway 10.00 total 113.95",
+            "Statement dated 2026-07-31 covering 2026-07-01 through 2026-07-31",
+            "Line items 1.11 2.22 3.33 4.44 5.55 6.66 7.77 8.88 9.99 10.10",
+            "Rates 0.0229 0.0195 0.0201 0.0188 0.0213 0.0177 0.0230 0.0209",
+            "Terminal 765 DBA 857 MID 1296297 batch 4471 lane 2",
+        )
+        for note in permitted:
+            with self.subTest(note=note):
+                record = self.mutated(
+                    lambda row, value=note: row.update({"review_notes": [value]})
+                )
+                self.assertEqual([], self.validator.validate_record(record))
+
+        # A calendar year is still a truncated PAN when the text names a card
+        # number outright, which is the boundary the year rule turns on.
+        for note in (
+            "Card number ending in 2026",
+            "Account number ending in 2024",
+            "PAN ending in 2025",
+            "last four digits 2026",
+        ):
+            with self.subTest(note=note):
+                record = self.mutated(
+                    lambda row, value=note: row.update({"review_notes": [value]})
+                )
+                self.assertIn("prohibited_payment_data", self.issue_codes(record))
+
+    def test_negative_zero_is_not_a_nonnegative_amount(self):
+        """JSON Schema compares -0.0 as equal to 0, so `minimum: 0` admits it.
+
+        The arithmetic rules reconcile for the same reason, so the record was
+        reported valid and only rendered as "-0.00" downstream.
+        """
+        for label, value in (
+            ("decimal", Decimal("-0.00")),
+            ("float", -0.0),
+        ):
+            with self.subTest(kind=label):
+                record = self.mutated(
+                    lambda row, amount=value: row.update({"statement_credits": amount})
+                )
+                self.assertIn("negative_zero", self.issue_codes(record))
+
+        parsed = self.validator.loads_record('{"statement_credits":-0.0}')
+        self.assertTrue(parsed["statement_credits"].is_signed())
+
+        unsigned = self.mutated(
+            lambda row: row.update({"statement_credits": Decimal("0.00")})
+        )
+        self.assertEqual([], self.validator.validate_record(unsigned))
+
+    def test_lone_surrogates_are_rejected_before_they_break_serialization(self):
+        record = self.validator.loads_record('{"review_notes":["note \\ud800 here"]}')
+        mutated = self.mutated(
+            lambda row: row.update({"review_notes": record["review_notes"]})
+        )
+        self.assertIn("unencodable_text", self.issue_codes(mutated))
+        with self.assertRaises(UnicodeEncodeError):
+            record["review_notes"][0].encode("utf-8")
+
+    def test_schema_is_verified_against_its_declared_checksum(self):
+        """A substituted schema must not be able to certify a record.
+
+        checksums.txt already carried the schema digest and the validator
+        already computed one, but nothing compared them, so a schema edited to
+        permit merchant identity and a non-USD currency reported VALID.
+        """
+        self.assertEqual("verified", self.validator.schema_integrity_state())
+
+        original = SCHEMA_PATH.read_bytes()
+        substituted = original.replace(b'"const": "USD"', b'"const": "EUR"')
+        self.assertNotEqual(original, substituted)
+        try:
+            SCHEMA_PATH.write_bytes(substituted)
+            self.assertEqual("mismatch", self.validator.schema_integrity_state())
+            self.assertEqual({"schema_integrity"}, self.issue_codes(self.valid_record))
+        finally:
+            SCHEMA_PATH.write_bytes(original)
+        self.assertEqual("verified", self.validator.schema_integrity_state())
+        self.assertEqual([], self.validator.validate_record(self.valid_record))
+
+    def test_schema_verification_does_not_break_an_offline_or_packaged_copy(self):
+        """Absence of checksums.txt is not failure; disagreement with it is.
+
+        A vendored or offline copy may ship only the tool and the schema, so an
+        undeclared schema still validates and the corpus report says so.
+        """
+        original = self.validator.CHECKSUMS_PATH
+        try:
+            self.validator.CHECKSUMS_PATH = ROOT / "checksums-not-present.txt"
+            self.assertEqual("undeclared", self.validator.schema_integrity_state())
+            self.assertEqual([], self.validator.validate_record(self.valid_record))
+        finally:
+            self.validator.CHECKSUMS_PATH = original
+        self.assertEqual(
+            "verified", self.validator.build_corpus_report(ROOT)["schema_integrity"]
+        )
+
+    def test_corpus_requires_invalid_vectors_to_emit_exactly_declared_codes(self):
+        """Subset semantics let a vector emit any number of undeclared codes."""
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "release"
+            shutil.copytree(ROOT, candidate)
+            manifest_path = candidate / "test-vectors/manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["invalid"]["overprecise-rate.json"] = ["rate_precision"]
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n"
+            )
+
+            report = self.validator.build_corpus_report(candidate)
+            self.assertEqual("fail", report["status"])
+            self.assertIn(
+                {
+                    "file": "overprecise-rate.json",
+                    "result": "undeclared_rule_observed",
+                },
+                report["unexpected"],
+            )
+
+    def test_cli_success_line_does_not_claim_privacy_rules_are_satisfied(self):
+        """SECURITY.md states screening cannot prove prose is free of
+        identifying information, so the success line must not claim it does."""
+        result = subprocess.run(
+            [sys.executable, str(VALIDATOR_PATH), str(EXAMPLE_PATH)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(0, result.returncode)
+        self.assertIn("VALID:", result.stdout)
+        self.assertNotIn("privacy rules", result.stdout)
+        self.assertIn("cannot establish", result.stdout)
+        self.assertIn("human review", result.stdout)
 
     def test_identity_bank_and_credential_values_in_notes_are_rejected(self):
         prohibited_notes = (

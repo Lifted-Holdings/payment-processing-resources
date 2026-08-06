@@ -21,14 +21,17 @@ from decimal import (
     localcontext,
 )
 from importlib.metadata import version as package_version
+from itertools import chain
 from pathlib import Path
 from typing import Any, Iterable
 
-from jsonschema import Draft202012Validator, FormatChecker, validators
+from jsonschema import Draft202012Validator, FormatChecker, SchemaError, validators
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema/payment-statement-audit.schema.json"
+SCHEMA_RELEASE_NAME = "schema/payment-statement-audit.schema.json"
+CHECKSUMS_PATH = ROOT / "checksums.txt"
 VALIDATOR_VERSION = "1.2.0"
 VALIDATION_DEPENDENCIES = (
     "attrs",
@@ -124,7 +127,30 @@ CSV_OPTIONAL_MONEY = (
 )
 CSV_OPTIONAL_RATE = ("net_cost_of_acceptance_rate", "recurring_effective_rate")
 
-_PAN_CANDIDATE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+# --- PAN screening limits ---------------------------------------------------
+# Card numbers are 13 to 19 digits. Windows are evaluated inside longer digit
+# runs so a PAN does not escape the screen merely by having an expiry, an
+# amount, or an invoice number butted up against it.
+PAN_MIN_DIGITS = 13
+PAN_MAX_DIGITS = 19
+# A punctuation separator (full stop, comma, middle dot ...) joins two digit
+# groups only when both are at least this long. Card masks group digits in fours, fives and
+# sixes; money and rates in audit prose are 1-3 digits then exactly two cents,
+# so this is what keeps "1,234.56 7,890.12 3,456.78" from being concatenated
+# into an 18-digit candidate. Space and dash separators join unconditionally,
+# which is exactly what the previous screen already did.
+PAN_PUNCTUATION_JOIN_MIN_GROUP = 3
+# A card mask is short: the longest real one, "xxxx-xxxx-xxxx-", is fifteen
+# characters. Every mask quantifier below is bounded so each starting offset
+# costs a constant amount of backtracking rather than an amount that grows with
+# the length of the run; that bound is what makes these patterns linear instead
+# of quadratic. The gap between a mask and its digits is bounded for the same
+# reason -- an unbounded `\s*` re-scans the whole whitespace run once per
+# backtracking combination.
+MAX_MASK_RUN = 24
+MAX_MASK_DIGIT_GAP = 8
+_MASK_CHARACTERS = "*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6"
+
 _SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
 _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 _AUTHENTICATION_LABEL = re.compile(
@@ -132,26 +158,47 @@ _AUTHENTICATION_LABEL = re.compile(
     re.I,
 )
 _BANK_VALUE = re.compile(
-    r"\b(?:routing|account)(?:\s*(?:number|no))?\b[^\r\n\d]{0,12}\d{4,}",
+    r"\b(?:routing|account)(?P<qualifier>\s*(?:number|no))?\b"
+    r"[^\r\n\d]{0,12}(?P<digits>\d{4,})",
     re.I,
 )
-_TRUNCATED_PAN = re.compile(
+# A brand or card label, then either an ending phrase or a run of mask
+# characters, then the four digits that survive truncation. The mask branch is
+# captured separately because a mask is unambiguous while an ending phrase is
+# not: see _contains_truncated_pan_reference.
+_LABELLED_TRUNCATED_PAN = re.compile(
     r"\b(?:card(?:\s*(?:number|no))?|pan|account|acct|visa|mastercard|amex|discover)\b"
-    r"[^\r\n]{0,32}?(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4)"
-    r"(?:\s+digits?)?|[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6 -]{2,})"
-    r"\s*\d{4}\b",
+    r"[^\r\n]{0,32}?(?:(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4)(?:\s+digits?)?)"
+    rf"|(?P<mask>[{_MASK_CHARACTERS} -]{{2,{MAX_MASK_RUN}}}))"
+    rf"\s{{0,{MAX_MASK_DIGIT_GAP}}}(?P<digits>\d{{4}})\b",
     re.I,
 )
-_UNLABELED_TRUNCATED_PAN = re.compile(
-    r"(?:\b(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4|five|5)"
-    r"(?:\s+digits?)?)\b[^\r\n\d]{0,16}\d{4,5}\b|"
-    r"(?<![\w\d])(?:[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6][ -]?){4,}"
-    r"\d{4,6}(?!\d)|"
-    r"(?<!\d)\d{6}[ -]?(?:[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6][ -]?){2,}"
-    r"\d{4,5}(?!\d)|"
+# An ending phrase and its trailing group, with no brand or card label at all.
+_ENDING_PHRASE_DIGITS = re.compile(
+    r"\b(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4|five|5)(?:\s+digits?)?)\b"
+    r"[^\r\n\d]{0,16}(?P<digits>\d{4,5})\b",
+    re.I,
+)
+# Mask characters adjacent to digits. A mask never appears in ordinary prose, so
+# these need no further disambiguation.
+_MASKED_DIGITS = re.compile(
+    rf"(?<![\w\d])(?:[{_MASK_CHARACTERS}][ -]?){{4,{MAX_MASK_RUN}}}\d{{4,6}}(?!\d)|"
+    rf"(?<!\d)\d{{6}}[ -]?(?:[{_MASK_CHARACTERS}][ -]?){{2,{MAX_MASK_RUN}}}\d{{4,5}}(?!\d)",
+    re.I,
+)
+_FIRST_SIX_LAST_FOUR = re.compile(
     r"\bfirst\s+(?:six|6)(?:\s+digits?)?\b[^\r\n\d]{0,16}\d{6}\b"
     r"[^\r\n]{0,32}?\blast\s+(?:four|4|five|5)(?:\s+digits?)?\b"
-    r"[^\r\n\d]{0,16}\d{4,5}\b)",
+    r"[^\r\n\d]{0,16}\d{4,5}\b",
+    re.I,
+)
+_CALENDAR_YEAR = re.compile(r"(?:19|20)\d{2}")
+# Tokens that name a card number outright. Only these promote a trailing
+# calendar year back into a truncated-PAN reference; the bare words "card",
+# "account" and "visa" appear constantly in legitimate fee prose.
+_EXPLICIT_CARD_NUMBER_TOKEN = re.compile(
+    r"\b(?:card\s*(?:number|no)\b|pan\b|primary\s+account\s+number\b|"
+    r"account\s*(?:number|no)\b|last\s+(?:four|4)\s+digits\b)",
     re.I,
 )
 _LABELED_CREDENTIAL = re.compile(
@@ -269,8 +316,63 @@ def load_record(path: Path | str) -> dict[str, Any]:
     return loads_record(path.read_text(encoding="utf-8"))
 
 
+def _declared_checksum(name: str) -> str | None:
+    """The SHA-256 that checksums.txt declares for a released file, if declared.
+
+    Absence is deliberately not a failure. This validator is meant to run from a
+    packaged, vendored or offline copy that may carry only the tool and the
+    schema, and an integrity check that refuses to start without a manifest
+    would break exactly those uses. Presence is authoritative, though:
+    checksums.txt is the same declaration the publication gate verifies the
+    whole release against, so a schema that disagrees with it has been
+    substituted and must not be used to certify anything.
+    """
+    try:
+        source = CHECKSUMS_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    for line in source.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == name:
+            return parts[0]
+    return None
+
+
+_SCHEMA_VALIDATOR_CACHE: dict[str, Draft202012Validator] = {}
+
+
+def schema_integrity_state() -> str:
+    """`verified`, `undeclared`, or `mismatch` for the installed schema file."""
+    declared = _declared_checksum(SCHEMA_RELEASE_NAME)
+    if declared is None:
+        return "undeclared"
+    try:
+        digest = hashlib.sha256(SCHEMA_PATH.read_bytes()).hexdigest()
+    except OSError:
+        return "mismatch"
+    return "verified" if declared == digest else "mismatch"
+
+
 def _schema_validator() -> Draft202012Validator:
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    """Verify the schema against its declared checksum, then compile it.
+
+    The bytes are re-read and re-hashed on every call, which costs about 60
+    microseconds, so a schema swapped part way through a run cannot ride a warm
+    cache. Only the compiled validator is cached, keyed by digest, because
+    building one costs about 12 milliseconds and the corpus builds one per
+    record.
+    """
+    source = SCHEMA_PATH.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    declared = _declared_checksum(SCHEMA_RELEASE_NAME)
+    if declared is not None and declared != digest:
+        raise ValueError(
+            "schema_integrity: schema does not match its declared checksum"
+        )
+    cached = _SCHEMA_VALIDATOR_CACHE.get(digest)
+    if cached is not None:
+        return cached
+    schema = json.loads(source.decode("utf-8"))
     Draft202012Validator.check_schema(schema)
     number_check = Draft202012Validator.TYPE_CHECKER.redefine(
         "number",
@@ -282,7 +384,11 @@ def _schema_validator() -> Draft202012Validator:
     decimal_validator = validators.extend(
         Draft202012Validator, type_checker=number_check
     )
-    return decimal_validator(schema, format_checker=FormatChecker())
+    validator = decimal_validator(schema, format_checker=FormatChecker())
+    if len(_SCHEMA_VALIDATOR_CACHE) >= 4:
+        _SCHEMA_VALIDATOR_CACHE.clear()
+    _SCHEMA_VALIDATOR_CACHE[digest] = validator
+    return validator
 
 
 def _pointer(parts: Iterable[Any]) -> str:
@@ -300,8 +406,22 @@ def _pointer(parts: Iterable[Any]) -> str:
 
 def _schema_issues(record: dict[str, Any]) -> list[ValidationIssue]:
     issues = []
+    try:
+        validator = _schema_validator()
+    except (OSError, UnicodeError, ValueError, SchemaError):
+        # Fail closed. A schema that cannot be read, parsed, or reconciled with
+        # its declared checksum cannot establish that a record is valid, and a
+        # substituted one would happily accept merchant identity or a non-USD
+        # currency. No record is certified while the contract is in doubt.
+        return [
+            ValidationIssue(
+                "schema_integrity",
+                "/",
+                "The schema could not be loaded or does not match the checksum declared for this release.",
+            )
+        ]
     for error in sorted(
-        _schema_validator().iter_errors(record),
+        validator.iter_errors(record),
         key=lambda error: _pointer(error.absolute_path),
     ):
         validator_name = str(error.validator or "validation")
@@ -391,22 +511,236 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _string_contains_prohibited_data(value: str) -> bool:
+_BREAK = -1
+_FREE_SEPARATOR = -2
+_PUNCTUATION_SEPARATOR = -3
+_CHARACTER_ROLE_CACHE: dict[str, int] = {}
+
+
+def _character_role(character: str) -> int:
+    """Digit value, separator kind, or break, memoized per distinct character.
+
+    Unicode categories are consulted rather than a literal character class so
+    that every space, punctuation and format character counts as a separator.
+    The previous screen tolerated only ASCII space and hyphen, which a statement
+    PDF defeats by pasting U+00A0 between the digit groups.
+    """
+    cached = _CHARACTER_ROLE_CACHE.get(character)
+    if cached is not None:
+        return cached
+    category = unicodedata.category(character)
+    if category == "Nd":
+        role = unicodedata.decimal(character)
+    elif character.isspace() or category in ("Zs", "Zl", "Zp", "Pd", "Cf"):
+        # `isspace` is checked as well as the Z categories so that tab, newline
+        # and carriage return count as separators. Those three are exactly the
+        # control characters _string_contains_unsafe_text_control permits in a
+        # note, so they are the ones a spreadsheet or PDF paste can legitimately
+        # leave between the digit groups of a card number.
+        role = _FREE_SEPARATOR
+    elif category.startswith("P"):
+        role = _PUNCTUATION_SEPARATOR
+    else:
+        role = _BREAK
+    _CHARACTER_ROLE_CACHE[character] = role
+    return role
+
+
+def _digit_runs(text: str) -> Iterable[list[int]]:
+    """Yield the digit runs long enough to hide a PAN, in one linear pass."""
+    run: list[int] = []
+    group: list[int] = []
+    previous_group_length = 0
+    pending = 0  # 0 none, 1 free separator, 2 punctuation separator
+
+    def close_group() -> list[int] | None:
+        """Attach the finished group to the open run, or start a new run."""
+        nonlocal run, group, previous_group_length, pending
+        if not group:
+            return None
+        joins = run and (
+            pending == 1
+            or (
+                pending == 2
+                and previous_group_length >= PAN_PUNCTUATION_JOIN_MIN_GROUP
+                and len(group) >= PAN_PUNCTUATION_JOIN_MIN_GROUP
+            )
+        )
+        finished = None
+        if joins:
+            run.extend(group)
+        else:
+            finished = run
+            run = list(group)
+        previous_group_length = len(group)
+        group = []
+        pending = 0
+        return finished
+
+    def end_run() -> list[int] | None:
+        nonlocal run, previous_group_length, pending
+        finished = run
+        run = []
+        previous_group_length = 0
+        pending = 0
+        return finished
+
+    def long_enough(finished: list[int] | None) -> bool:
+        return bool(finished) and len(finished or ()) >= PAN_MIN_DIGITS
+
+    for character in text:
+        role = _character_role(character)
+        if role >= 0:
+            group.append(role)
+            continue
+        closed = close_group()
+        if long_enough(closed):
+            yield closed  # type: ignore[misc]
+        # close_group leaves `pending` alone when there was no group to close,
+        # so a truthy `pending` here means two separators in a row.
+        if role == _BREAK or pending:
+            ended = end_run()
+            if long_enough(ended):
+                yield ended  # type: ignore[misc]
+        elif run:
+            pending = 1 if role == _FREE_SEPARATOR else 2
+    for finished in (close_group(), end_run()):
+        if long_enough(finished):
+            yield finished  # type: ignore[misc]
+
+
+_DOUBLED_DIGIT = tuple(
+    value * 2 - 9 if value * 2 > 9 else value * 2 for value in range(10)
+)
+
+
+def _run_hides_a_pan(run: list[int]) -> bool:
+    """True when any 13-to-19 digit window of the run passes Luhn.
+
+    Two running sums make each window an O(1) test: `even` doubles the
+    even-indexed digits below each offset and `odd` doubles the odd-indexed
+    ones, and a window [start, end) doubles exactly the positions congruent to
+    `end` modulo two. Luhn itself stays the confirmation step -- a window is only
+    reported after _luhn_valid agrees on the actual digits -- so the whole scan
+    is linear in the length of the run instead of quadratic.
+
+    Only the last PAN_MAX_DIGITS + 1 running sums are retained, in a ring
+    buffer, because no window reaches further back than that. Keeping a full
+    prefix array instead cost 84 MiB on a one-megabyte all-digit note, which
+    would have traded the quadratic time defect for an allocation one.
+    """
+    span = PAN_MAX_DIGITS + 1
+    even_history = [0] * span
+    odd_history = [0] * span
+    even_total = 0
+    odd_total = 0
+    for index, value in enumerate(run):
+        doubled = _DOUBLED_DIGIT[value]
+        if index % 2 == 0:
+            even_total += doubled
+            odd_total += value
+        else:
+            even_total += value
+            odd_total += doubled
+        end = index + 1
+        even_history[end % span] = even_total
+        odd_history[end % span] = odd_total
+        if end < PAN_MIN_DIGITS:
+            continue
+        if end % 2 == 0:
+            total, history = even_total, even_history
+        else:
+            total, history = odd_total, odd_history
+        for start in range(max(0, end - PAN_MAX_DIGITS), end - PAN_MIN_DIGITS + 1):
+            # history[start % span] still holds the sum at `start`: at most
+            # PAN_MAX_DIGITS entries have been written since, and the buffer
+            # holds one more than that.
+            if (total - history[start % span]) % 10 == 0 and _luhn_valid(
+                "".join(map(str, run[start:end]))
+            ):
+                return True
+    return False
+
+
+def _contains_pan(value: str) -> bool:
+    return any(_run_hides_a_pan(run) for run in _digit_runs(value))
+
+
+def _contains_truncated_pan_reference(value: str) -> bool:
+    """Truncated-PAN references, without swallowing ordinary reporting prose.
+
+    A mask, or a "first six ... last four" pair, is unambiguous. A bare ending
+    phrase is not: "the quarter ending in 2025" is a reporting period, not a
+    card. A four-digit calendar year after an ending phrase is therefore only
+    treated as a truncated PAN when the text also names a card number outright,
+    which is the trade the screen has to make in either direction. Non-year
+    groups such as 4242, and every five-digit group, still fail.
+    """
+    if _MASKED_DIGITS.search(value) or _FIRST_SIX_LAST_FOUR.search(value):
+        return True
+    names_a_card_number: bool | None = None
+    # chain, not a materialized tuple: the first prohibited match must be able
+    # to return without both patterns having scanned the whole string first.
+    for match in chain(
+        _ENDING_PHRASE_DIGITS.finditer(value),
+        _LABELLED_TRUNCATED_PAN.finditer(value),
+    ):
+        if match.groupdict().get("mask") is not None:
+            return True
+        if not _CALENDAR_YEAR.fullmatch(match.group("digits")):
+            return True
+        if names_a_card_number is None:
+            names_a_card_number = bool(_EXPLICIT_CARD_NUMBER_TOKEN.search(value))
+        if names_a_card_number:
+            return True
+    return False
+
+
+def _contains_bank_value(value: str) -> bool:
+    """Routing and account numbers, without catching the word "account" near a year.
+
+    The label alone is far too weak on its own in this corpus: "the account
+    ending in 2026 fiscal year" put a bare "account" within twelve characters of
+    a four-digit number and was reported as bank data. A qualifier such as
+    "number" still flags any following digits, and an unqualified label still
+    flags anything that is not a bare calendar year.
+    """
+    for match in _BANK_VALUE.finditer(value):
+        if match.group("qualifier") is not None:
+            return True
+        if not _CALENDAR_YEAR.fullmatch(match.group("digits")):
+            return True
+    return False
+
+
+def _screen_text(value: str) -> bool:
     if _SSN.search(value) or _EMAIL.search(value) or _CREDENTIAL.search(value):
         return True
-    for candidate in _PAN_CANDIDATE.finditer(value):
-        digits = re.sub(r"\D", "", candidate.group(0))
-        if 13 <= len(digits) <= 19 and _luhn_valid(digits):
-            return True
+    if _contains_pan(value):
+        return True
     if (
         _AUTHENTICATION_LABEL.search(value)
-        or _BANK_VALUE.search(value)
-        or _TRUNCATED_PAN.search(value)
-        or _UNLABELED_TRUNCATED_PAN.search(value)
+        or _contains_bank_value(value)
+        or _contains_truncated_pan_reference(value)
         or _LABELED_CREDENTIAL.search(value)
     ):
         return True
     return False
+
+
+def _string_contains_prohibited_data(value: str) -> bool:
+    """Screen the text as written, and again after NFKC normalization.
+
+    Text pasted out of a statement PDF routinely carries compatibility digit
+    forms and non-breaking separators that NFKC folds to the ASCII shapes these
+    screens are written against. Both forms are screened rather than only the
+    normalized one, so normalization can only add coverage and can never drop a
+    match the raw text would have produced.
+    """
+    if _screen_text(value):
+        return True
+    normalized = unicodedata.normalize("NFKC", value)
+    return normalized != value and _screen_text(normalized)
 
 
 def _string_contains_unsafe_text_control(value: str) -> bool:
@@ -414,6 +748,21 @@ def _string_contains_unsafe_text_control(value: str) -> bool:
         character not in "\t\n\r" and unicodedata.category(character) in {"Cc", "Cf"}
         for character in value
     )
+
+
+def _string_is_unencodable(value: str) -> bool:
+    """True for text that cannot be written back out as UTF-8.
+
+    json.loads turns a "\\udc80"-style escape into a lone surrogate, which
+    validates against every structural rule and then raises UnicodeEncodeError
+    at the moment anything serializes the record. Rejecting it here attributes
+    the failure to the record instead of to whatever tries to publish it.
+    """
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
 
 
 def _privacy_issues(value: Any, path: tuple[Any, ...] = ()) -> list[ValidationIssue]:
@@ -450,11 +799,50 @@ def _privacy_issues(value: Any, path: tuple[Any, ...] = ()) -> list[ValidationIs
                     "Text contains a control character that can obscure or reorder displayed content.",
                 )
             )
+        if _string_is_unencodable(value):
+            issues.append(
+                ValidationIssue(
+                    "unencodable_text",
+                    _pointer(path),
+                    "Text contains a code point that cannot be encoded as UTF-8.",
+                )
+            )
+    return issues
+
+
+def _signed_zero_issues(
+    value: Any, path: tuple[Any, ...] = ()
+) -> list[ValidationIssue]:
+    """Reject negative zero anywhere in the record.
+
+    JSON Schema compares -0.0 as equal to 0, so the `minimum: 0` bound on every
+    money and rate definition admits it unchanged, and the arithmetic rules then
+    reconcile because -0.00 == 0.00. It survives only into the published output,
+    where a nonnegative amount renders as "-0.00". It is never a meaningful
+    value in this contract, on signed fields either, so it is refused outright.
+    """
+    issues: list[ValidationIssue] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            issues.extend(_signed_zero_issues(child, (*path, key)))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            issues.extend(_signed_zero_issues(child, (*path, index)))
+    elif isinstance(value, (float, Decimal)) and not isinstance(value, bool):
+        number = _decimal(value)
+        if number is not None and number == 0 and number.is_signed():
+            issues.append(
+                ValidationIssue(
+                    "negative_zero",
+                    _pointer(path),
+                    "A signed negative zero is not an accepted amount or rate.",
+                )
+            )
     return issues
 
 
 def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
-    issues: list[ValidationIssue] = []
+    issues: list[ValidationIssue] = _signed_zero_issues(record)
 
     period = record.get("statement_period")
     if isinstance(period, dict):
@@ -1047,9 +1435,21 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
             observed = {issue.code for issue in validate_record(load_record(path))}
         except (OSError, UnicodeError, ValueError) as exc:
             observed = {str(exc).split(":", maxsplit=1)[0]}
-        if not set(expected_codes).issubset(observed):
+        # Exact equality, not subset containment. Under subset semantics an
+        # invalid vector could emit any number of undeclared codes -- including
+        # ones that only appear because the vector is malformed in a second,
+        # unintended way -- and still be reported as reproducing the corpus.
+        if set(expected_codes) != observed:
+            missing = set(expected_codes) - observed
             unexpected.append(
-                {"file": filename, "result": "expected_rule_not_observed"}
+                {
+                    "file": filename,
+                    "result": (
+                        "expected_rule_not_observed"
+                        if missing
+                        else "undeclared_rule_observed"
+                    ),
+                }
             )
 
     csv_issues = validate_csv_template(root / "payment-statement-audit-template.csv")
@@ -1067,6 +1467,9 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
         "unexpected_results": len(unexpected),
         "unexpected": unexpected,
         "schema_sha256": _sha256(root / "schema/payment-statement-audit.schema.json"),
+        # State of the schema this validator actually loaded, so a consumer can
+        # tell a checksum-verified run from one where no declaration shipped.
+        "schema_integrity": schema_integrity_state(),
         "validator_sha256": _sha256(root / "tools/validate_audit.py"),
         "jsonschema_version": package_version("jsonschema"),
         "dependency_versions": {
@@ -1129,8 +1532,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.as_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     elif report["status"] == "valid":
+        # SECURITY.md is explicit that pattern screening "cannot prove arbitrary
+        # prose contains no identifying or confidential information", so the
+        # success line reports what was actually established -- the structural
+        # and accounting rules passed, and no prohibited pattern matched -- and
+        # does not claim the record satisfies "privacy rules".
         print(
-            "VALID: record satisfies the schema v1.1.0 structural, accounting, and privacy rules."
+            "VALID: record satisfies the structural, accounting, and precision rules, "
+            "and no prohibited pattern was detected."
+        )
+        print(
+            "Pattern screening cannot establish that free text is free of identifying "
+            "or confidential information; human review is still required."
         )
     else:
         print(f"INVALID: {report['issue_count']} rule violation(s).")

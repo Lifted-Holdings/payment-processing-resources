@@ -47,7 +47,17 @@
       "period_duration"
     ],
     "overprecise-rate.json": [
-      "rate_precision"
+      "rate_precision",
+      "effective_rate_mismatch"
+    ],
+    "negative-zero-credit.json": [
+      "negative_zero"
+    ],
+    "obfuscated-pan-in-note.json": [
+      "prohibited_payment_data"
+    ],
+    "lone-surrogate-note.json": [
+      "unencodable_text"
     ],
     "pathological-number.json": [
       "number_range"

@@ -71,6 +71,9 @@
     "test-vectors/invalid/dormant-month-claims-comparable.json",
     "test-vectors/invalid/undisclosed-volume-nonzero.json",
     "test-vectors/invalid/combined-group-missing-note.json",
-    "test-vectors/invalid/orphan-derived-field.json"
+    "test-vectors/invalid/orphan-derived-field.json",
+    "test-vectors/invalid/negative-zero-credit.json",
+    "test-vectors/invalid/obfuscated-pan-in-note.json",
+    "test-vectors/invalid/lone-surrogate-note.json"
   ]
 }
