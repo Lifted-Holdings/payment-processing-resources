@@ -1,15 +1,15 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
   "upload_type": "dataset",
-  "description": "<p>A processor-neutral, machine-readable model for normalizing monthly merchant payment-processing statements without storing cardholder data. Version 1.1.7 preserves the schema 1.1.0 contract while verifying Kaggle's latest public Ready version history, its version-specific human page, and byte-exact archive expansion. It retains strict transformed-path validation, deterministic release archives, stale-mirror rejection, truncated-card-reference screening, and Unicode display-control rejection.</p>",
+  "description": "<p>A processor-neutral, machine-readable model for normalizing monthly merchant payment-processing statements without storing cardholder data. Version 1.2.0 preserves the schema 1.2.0 contract while verifying Kaggle's latest public Ready version history, its version-specific human page, and byte-exact archive expansion. It retains strict transformed-path validation, deterministic release archives, stale-mirror rejection, truncated-card-reference screening, and Unicode display-control rejection.</p>",
   "creators": [
     {
       "name": "Lifted Payments",
       "affiliation": "Lifted Holdings"
     }
   ],
-  "version": "1.1.7",
-  "publication_date": "2026-08-03",
+  "version": "1.2.0",
+  "publication_date": "2026-08-05",
   "access_right": "open",
   "license": "cc-by-4.0",
   "language": "eng",
@@ -30,10 +30,10 @@
       "resource_type": "publication-technicalnote"
     },
     {
-      "identifier": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.7",
+      "identifier": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0",
       "relation": "isSourceOf",
       "resource_type": "software"
     }
   ],
-  "notes": "All figures and validation vectors are synthetic and do not describe a real merchant. The model contains no cardholder data. The validation report records 2 accepted valid vectors and 17 correctly rejected invalid vectors. Package 1.1.7 preserves the schema 1.1.0 record contract. The publication gate proves declared package and release provenance; it is not an accounting opinion, legal review, interchange-pricing guarantee, malware sandbox, or guarantee of savings."
+  "notes": "All figures and validation vectors are synthetic and do not describe a real merchant. The model contains no cardholder data. The validation report records 4 accepted valid vectors and 23 correctly rejected invalid vectors. Package 1.2.0 preserves the schema 1.2.0 record contract. The publication gate proves declared package and release provenance; it is not an accounting opinion, legal review, interchange-pricing guarantee, malware sandbox, or guarantee of savings."
 }

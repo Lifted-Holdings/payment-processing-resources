@@ -1,7 +1,7 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
   "subtitle": "A processor-neutral merchant statement-audit model with reproducible validation",
-  "description": "Version 1.1.7 of the Lifted Payments processor-neutral model for normalizing merchant payment-processing statement totals. Kaggle expands the immutable release archive for browsing; the published gate verifies the unique latest public Ready version, its version-specific human page, every expanded path and byte against the canonical archive, and the SHA-256 sidecar exactly. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: 10.5281/zenodo.21766038 . Versioned source: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.7 . Release archive SHA-256: {{RELEASE_ARCHIVE_SHA256}} . The package contains only synthetic data and no real merchant or cardholder data.",
+  "description": "Version 1.2.0 of the Lifted Payments processor-neutral model for normalizing merchant payment-processing statement totals. Kaggle expands the immutable release archive for browsing; the published gate verifies the unique latest public Ready version, its version-specific human page, every expanded path and byte against the canonical archive, and the SHA-256 sidecar exactly. Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/ . Version DOI: 10.5281/zenodo.21816571 . Versioned source: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0 . Release archive SHA-256: {{RELEASE_ARCHIVE_SHA256}} . The package contains only synthetic data and no real merchant or cardholder data.",
   "id": "liftedpayments/payment-statement-audit-model",
   "licenses": [
     {
@@ -10,7 +10,7 @@
   ],
   "resources": [
     {
-      "path": "lifted-payments-statement-audit-model-v1.1.7.zip",
+      "path": "lifted-payments-statement-audit-model-v1.2.0.zip",
       "description": "Byte-reproducible immutable release archive."
     },
     {
@@ -24,5 +24,5 @@
     "data analysis"
   ],
   "expectedUpdateFrequency": "not specified",
-  "userSpecifiedSources": "Original synthetic dataset and open-source reference validator authored by Lifted Payments. Source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.7 . Archival record: https://doi.org/10.5281/zenodo.21766038 ."
+  "userSpecifiedSources": "Original synthetic dataset and open-source reference validator authored by Lifted Payments. Source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0 . Archival record: https://doi.org/10.5281/zenodo.21816571 ."
 }

@@ -21,15 +21,18 @@ from decimal import (
     localcontext,
 )
 from importlib.metadata import version as package_version
+from itertools import chain
 from pathlib import Path
 from typing import Any, Iterable
 
-from jsonschema import Draft202012Validator, FormatChecker, validators
+from jsonschema import Draft202012Validator, FormatChecker, SchemaError, validators
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = ROOT / "schema/payment-statement-audit.schema.json"
-VALIDATOR_VERSION = "1.1.7"
+SCHEMA_RELEASE_NAME = "schema/payment-statement-audit.schema.json"
+CHECKSUMS_PATH = ROOT / "checksums.txt"
+VALIDATOR_VERSION = "1.2.0"
 VALIDATION_DEPENDENCIES = (
     "attrs",
     "jsonschema",
@@ -46,6 +49,10 @@ MAX_NUMBER_TOKEN_CHARS = 64
 MONEY_QUANTUM = Decimal("0.01")
 RATE_QUANTUM = Decimal("0.000001")
 MONEY_MAXIMUM = Decimal("999999999999.99")
+# Above this, the month is arithmetically true but uninformative: fixed fees dominate a
+# trivial volume and the rate says nothing about pricing. Observed across a real portfolio
+# in 17% of statements, topping out above 8000%. Such a record must not claim comparability.
+RATE_COMPARABLE_MAXIMUM = Decimal("1")
 FEE_CATEGORIES = (
     "interchange",
     "assessments",
@@ -55,21 +62,30 @@ FEE_CATEGORIES = (
     "pci",
     "equipment",
     "chargebacks",
+    "blended_discount",
     "other",
 )
 SAFE_PATH_KEYS = {
+    "amex_acceptance",
     "amount",
     "average_ticket",
     "calculation_basis",
     "card_volume",
+    "cardholder_funded_fees",
     "category",
+    "combined",
+    "comparable",
     "currency",
     "effective_rate",
     "end",
     "fee_groups",
     "gross_processing_fees",
+    "merchant_borne_processing_fees",
+    "net_cost_of_acceptance_rate",
+    "non_recurring_fees",
     "notes",
     "pricing_model",
+    "recurring_effective_rate",
     "review_notes",
     "schema_version",
     "start",
@@ -77,6 +93,7 @@ SAFE_PATH_KEYS = {
     "statement_period",
     "total_processing_fees",
     "transaction_count",
+    "volume_disclosed",
 }
 CSV_HEADER = (
     "schema_version",
@@ -93,37 +110,102 @@ CSV_HEADER = (
     "average_ticket",
     "pricing_model",
     *FEE_CATEGORIES,
+    "amex_acceptance",
+    "comparable",
+    "volume_disclosed",
+    "cardholder_funded_fees",
+    "merchant_borne_processing_fees",
+    "net_cost_of_acceptance_rate",
+    "non_recurring_fees",
+    "recurring_effective_rate",
     "notes",
 )
+CSV_OPTIONAL_MONEY = (
+    "cardholder_funded_fees",
+    "merchant_borne_processing_fees",
+    "non_recurring_fees",
+)
+CSV_OPTIONAL_RATE = ("net_cost_of_acceptance_rate", "recurring_effective_rate")
 
-_PAN_CANDIDATE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+# --- PAN screening limits ---------------------------------------------------
+# Card numbers are 13 to 19 digits. Windows are evaluated inside longer digit
+# runs so a PAN does not escape the screen merely by having an expiry, an
+# amount, or an invoice number butted up against it.
+PAN_MIN_DIGITS = 13
+PAN_MAX_DIGITS = 19
+# Digits join across a gap of at most this many characters, none of which may be
+# a letter or a digit. The character CLASS of the separator is deliberately not
+# consulted: a screen that only joined across space and dash, or only across
+# punctuation between three-digit groups, missed "4111, 1111, 1111, 1111" as
+# well as "+", "=" and "~" separators and any PAN written in ones and twos.
+# Letters are what hold prose apart -- "2026-06-01 to 2026-06-30" breaks at
+# " to " -- and the gap bound stops two distant numbers from concatenating.
+PAN_MAX_GAP = 2
+# Cards group digits in fours, fives and sixes; money groups in threes with two
+# cents. A '.' or ',' therefore only joins groups at least this long.
+PAN_GROUP_MIN = 4
+# A card mask is short: the longest real one, "xxxx-xxxx-xxxx-", is fifteen
+# characters. Every mask quantifier below is bounded so each starting offset
+# costs a constant amount of backtracking rather than an amount that grows with
+# the length of the run; that bound is what makes these patterns linear instead
+# of quadratic. The gap between a mask and its digits is bounded for the same
+# reason -- an unbounded `\s*` re-scans the whole whitespace run once per
+# backtracking combination.
+MAX_MASK_RUN = 24
+MAX_MASK_DIGIT_GAP = 8
+_MASK_CHARACTERS = "*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6"
+
 _SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
-_EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
+_EMAIL = re.compile(
+    r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,4}\.[A-Z]{2,24}\b",
+    re.I,
+)
 _AUTHENTICATION_LABEL = re.compile(
     r"\b(?:cvv2?|cvc2?|cid|security\s*code|pin(?:\s*block)?)\b",
     re.I,
 )
 _BANK_VALUE = re.compile(
-    r"\b(?:routing|account)(?:\s*(?:number|no))?\b[^\r\n\d]{0,12}\d{4,}",
+    r"\b(?:routing|account)(?P<qualifier>\s*(?:number|no))?\b"
+    r"[^\r\n\d]{0,12}(?P<digits>\d{4,})",
     re.I,
 )
-_TRUNCATED_PAN = re.compile(
+# A brand or card label, then either an ending phrase or a run of mask
+# characters, then the four digits that survive truncation. The mask branch is
+# captured separately because a mask is unambiguous while an ending phrase is
+# not: see _contains_truncated_pan_reference.
+_LABELLED_TRUNCATED_PAN = re.compile(
     r"\b(?:card(?:\s*(?:number|no))?|pan|account|acct|visa|mastercard|amex|discover)\b"
-    r"[^\r\n]{0,32}?(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4)"
-    r"(?:\s+digits?)?|[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6 -]{2,})"
-    r"\s*\d{4}\b",
+    r"[^\r\n]{0,32}?(?:(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4)(?:\s+digits?)?)"
+    rf"|(?P<mask>[{_MASK_CHARACTERS} -]{{2,{MAX_MASK_RUN}}}))"
+    rf"\s{{0,{MAX_MASK_DIGIT_GAP}}}(?P<digits>\d{{4}})\b",
     re.I,
 )
-_UNLABELED_TRUNCATED_PAN = re.compile(
-    r"(?:\b(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4|five|5)"
-    r"(?:\s+digits?)?)\b[^\r\n\d]{0,16}\d{4,5}\b|"
-    r"(?<![\w\d])(?:[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6][ -]?){4,}"
-    r"\d{4,6}(?!\d)|"
-    r"(?<!\d)\d{6}[ -]?(?:[*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6][ -]?){2,}"
-    r"\d{4,5}(?!\d)|"
+# An ending phrase and its trailing group, with no brand or card label at all.
+_ENDING_PHRASE_DIGITS = re.compile(
+    r"\b(?:end(?:ing|s)?(?:\s+in)?|last\s+(?:four|4|five|5)(?:\s+digits?)?)\b"
+    r"[^\r\n\d]{0,16}(?P<digits>\d{4,5})\b",
+    re.I,
+)
+# Mask characters adjacent to digits. A mask never appears in ordinary prose, so
+# these need no further disambiguation.
+_MASKED_DIGITS = re.compile(
+    rf"(?<![\w\d])(?:[{_MASK_CHARACTERS}][ -]?){{4,{MAX_MASK_RUN}}}\d{{4,6}}(?!\d)|"
+    rf"(?<!\d)\d{{6}}[ -]?(?:[{_MASK_CHARACTERS}][ -]?){{2,{MAX_MASK_RUN}}}\d{{4,5}}(?!\d)",
+    re.I,
+)
+_FIRST_SIX_LAST_FOUR = re.compile(
     r"\bfirst\s+(?:six|6)(?:\s+digits?)?\b[^\r\n\d]{0,16}\d{6}\b"
     r"[^\r\n]{0,32}?\blast\s+(?:four|4|five|5)(?:\s+digits?)?\b"
-    r"[^\r\n\d]{0,16}\d{4,5}\b)",
+    r"[^\r\n\d]{0,16}\d{4,5}\b",
+    re.I,
+)
+_CALENDAR_YEAR = re.compile(r"(?:19|20)\d{2}")
+# Tokens that name a card number outright. Only these promote a trailing
+# calendar year back into a truncated-PAN reference; the bare words "card",
+# "account" and "visa" appear constantly in legitimate fee prose.
+_EXPLICIT_CARD_NUMBER_TOKEN = re.compile(
+    r"\b(?:card\s*(?:number|no)\b|pan\b|primary\s+account\s+number\b|"
+    r"account\s*(?:number|no)\b|last\s+(?:four|4)\s+digits\b)",
     re.I,
 )
 _LABELED_CREDENTIAL = re.compile(
@@ -131,9 +213,7 @@ _LABELED_CREDENTIAL = re.compile(
     r"\s*(?::|=|is)\s*[A-Za-z0-9_-]{3,}",
     re.I,
 )
-_CREDENTIAL = re.compile(
-    r"\b(?:sk|pk|ghp|github_pat|hf)_[A-Za-z0-9_-]{12,}\b", re.I
-)
+_CREDENTIAL = re.compile(r"\b(?:sk|pk|ghp|github_pat|hf)_[A-Za-z0-9_-]{12,}\b", re.I)
 _PROHIBITED_KEY = re.compile(
     r"(?:pan|card_?number|cvv|cvc|security_?code|pin_?block|routing_?number|"
     r"bank_?account|account_?number|ssn|password|api_?key|secret|token)",
@@ -243,8 +323,63 @@ def load_record(path: Path | str) -> dict[str, Any]:
     return loads_record(path.read_text(encoding="utf-8"))
 
 
+def _declared_checksum(name: str) -> str | None:
+    """The SHA-256 that checksums.txt declares for a released file, if declared.
+
+    Absence is deliberately not a failure. This validator is meant to run from a
+    packaged, vendored or offline copy that may carry only the tool and the
+    schema, and an integrity check that refuses to start without a manifest
+    would break exactly those uses. Presence is authoritative, though:
+    checksums.txt is the same declaration the publication gate verifies the
+    whole release against, so a schema that disagrees with it has been
+    substituted and must not be used to certify anything.
+    """
+    try:
+        source = CHECKSUMS_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    for line in source.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == name:
+            return parts[0]
+    return None
+
+
+_SCHEMA_VALIDATOR_CACHE: dict[str, Draft202012Validator] = {}
+
+
+def schema_integrity_state() -> str:
+    """`verified`, `undeclared`, or `mismatch` for the installed schema file."""
+    declared = _declared_checksum(SCHEMA_RELEASE_NAME)
+    if declared is None:
+        return "undeclared"
+    try:
+        digest = hashlib.sha256(SCHEMA_PATH.read_bytes()).hexdigest()
+    except OSError:
+        return "mismatch"
+    return "verified" if declared == digest else "mismatch"
+
+
 def _schema_validator() -> Draft202012Validator:
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    """Verify the schema against its declared checksum, then compile it.
+
+    The bytes are re-read and re-hashed on every call, which costs about 60
+    microseconds, so a schema swapped part way through a run cannot ride a warm
+    cache. Only the compiled validator is cached, keyed by digest, because
+    building one costs about 12 milliseconds and the corpus builds one per
+    record.
+    """
+    source = SCHEMA_PATH.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    declared = _declared_checksum(SCHEMA_RELEASE_NAME)
+    if declared is not None and declared != digest:
+        raise ValueError(
+            "schema_integrity: schema does not match its declared checksum"
+        )
+    cached = _SCHEMA_VALIDATOR_CACHE.get(digest)
+    if cached is not None:
+        return cached
+    schema = json.loads(source.decode("utf-8"))
     Draft202012Validator.check_schema(schema)
     number_check = Draft202012Validator.TYPE_CHECKER.redefine(
         "number",
@@ -256,7 +391,11 @@ def _schema_validator() -> Draft202012Validator:
     decimal_validator = validators.extend(
         Draft202012Validator, type_checker=number_check
     )
-    return decimal_validator(schema, format_checker=FormatChecker())
+    validator = decimal_validator(schema, format_checker=FormatChecker())
+    if len(_SCHEMA_VALIDATOR_CACHE) >= 4:
+        _SCHEMA_VALIDATOR_CACHE.clear()
+    _SCHEMA_VALIDATOR_CACHE[digest] = validator
+    return validator
 
 
 def _pointer(parts: Iterable[Any]) -> str:
@@ -274,8 +413,22 @@ def _pointer(parts: Iterable[Any]) -> str:
 
 def _schema_issues(record: dict[str, Any]) -> list[ValidationIssue]:
     issues = []
+    try:
+        validator = _schema_validator()
+    except (OSError, UnicodeError, ValueError, SchemaError):
+        # Fail closed. A schema that cannot be read, parsed, or reconciled with
+        # its declared checksum cannot establish that a record is valid, and a
+        # substituted one would happily accept merchant identity or a non-USD
+        # currency. No record is certified while the contract is in doubt.
+        return [
+            ValidationIssue(
+                "schema_integrity",
+                "/",
+                "The schema could not be loaded or does not match the checksum declared for this release.",
+            )
+        ]
     for error in sorted(
-        _schema_validator().iter_errors(record),
+        validator.iter_errors(record),
         key=lambda error: _pointer(error.absolute_path),
     ):
         validator_name = str(error.validator or "validation")
@@ -304,6 +457,20 @@ def _money_decimal(value: Any) -> Decimal | None:
     if (
         number is None
         or number < 0
+        or number > MONEY_MAXIMUM
+        or number.as_tuple().exponent < -2
+    ):
+        return None
+    return number
+
+
+def _signed_money_decimal(value: Any) -> Decimal | None:
+    """Like _money_decimal but admits negatives, for the one field where a dual-price
+    program can legitimately over-recover the merchant's processing cost."""
+    number = _decimal(value)
+    if (
+        number is None
+        or number < -MONEY_MAXIMUM
         or number > MONEY_MAXIMUM
         or number.as_tuple().exponent < -2
     ):
@@ -351,22 +518,237 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _string_contains_prohibited_data(value: str) -> bool:
+_BREAK = -1
+_FREE_SEPARATOR = -2
+_PUNCTUATION_SEPARATOR = -3
+_CHARACTER_ROLE_CACHE: dict[str, int] = {}
+
+
+def _character_role(character: str) -> int:
+    """Digit value, separator kind, or break, memoized per distinct character.
+
+    Unicode categories are consulted rather than a literal character class so
+    that every space, punctuation and format character counts as a separator.
+    The previous screen tolerated only ASCII space and hyphen, which a statement
+    PDF defeats by pasting U+00A0 between the digit groups.
+    """
+    cached = _CHARACTER_ROLE_CACHE.get(character)
+    if cached is not None:
+        return cached
+    category = unicodedata.category(character)
+    if category == "Nd":
+        role = unicodedata.decimal(character)
+    elif character.isspace() or category in ("Zs", "Zl", "Zp", "Pd", "Cf"):
+        # `isspace` is checked as well as the Z categories so that tab, newline
+        # and carriage return count as separators. Those three are exactly the
+        # control characters _string_contains_unsafe_text_control permits in a
+        # note, so they are the ones a spreadsheet or PDF paste can legitimately
+        # leave between the digit groups of a card number.
+        role = _FREE_SEPARATOR
+    elif category.startswith("P"):
+        role = _PUNCTUATION_SEPARATOR
+    else:
+        role = _BREAK
+    _CHARACTER_ROLE_CACHE[character] = role
+    return role
+
+
+def _digit_groups(text: str) -> Iterable[tuple[list[int], str]]:
+    """Split text into (digit group, following gap) pairs, in one linear pass."""
+    group: list[int] = []
+    gap: list[str] = []
+    for character in text:
+        digit = unicodedata.digit(character, -1) if character.isdigit() else -1
+        if digit >= 0:
+            if gap:
+                yield group, "".join(gap)
+                group, gap = [], []
+            group.append(digit)
+        elif group:
+            gap.append(character)
+        # characters before any digit are not part of a gap worth recording
+    if group:
+        yield group, "".join(gap)
+
+
+def _digit_runs(text: str) -> Iterable[list[int]]:
+    """Yield the digit runs long enough to hide a PAN.
+
+    A gap joins two groups when it is at most PAN_MAX_GAP characters and holds
+    no letter. The separator's Unicode class is deliberately NOT consulted --
+    an earlier version only joined space and dash, or punctuation between
+    three-digit groups, and so missed `4111, 1111, 1111, 1111` (the way a person
+    actually writes a card number) along with `+`, `=` and `~` separators.
+
+    The one exception is '.' and ',', which also group money and rates. Those
+    join only between groups of PAN_GROUP_MIN or more digits, which is how cards
+    are grouped and how money never is: "4111, 1111" joins, while "1,234.56" and
+    a rate list like "0.0229 0.0195" do not. Letters hold prose apart, so
+    "2026-06-01 to 2026-06-30" cannot concatenate into a spurious window.
+
+    Deliberate obfuscation -- a PAN split across two notes, base64-encoded, or
+    written one digit at a time -- is out of scope and documented as such in
+    SECURITY.md. This screen is built to stop accidental disclosure.
+    """
+    run: list[int] = []
+    previous = 0
+    preceding_gap: str | None = None
+    for group, gap in _digit_groups(text):
+        joins = (
+            bool(run)
+            and preceding_gap is not None
+            and (
+                len(preceding_gap) <= PAN_MAX_GAP
+                and not any(character.isalpha() for character in preceding_gap)
+                and (
+                    not any(character in ".," for character in preceding_gap)
+                    or (previous >= PAN_GROUP_MIN and len(group) >= PAN_GROUP_MIN)
+                )
+            )
+        )
+        if not joins:
+            if len(run) >= PAN_MIN_DIGITS:
+                yield run
+            run = []
+        run.extend(group)
+        previous = len(group)
+        preceding_gap = gap
+    if len(run) >= PAN_MIN_DIGITS:
+        yield run
+
+
+_DOUBLED_DIGIT = tuple(
+    value * 2 - 9 if value * 2 > 9 else value * 2 for value in range(10)
+)
+
+
+def _run_hides_a_pan(run: list[int]) -> bool:
+    """True when any 13-to-19 digit window of the run passes Luhn.
+
+    Two running sums make each window an O(1) test: `even` doubles the
+    even-indexed digits below each offset and `odd` doubles the odd-indexed
+    ones, and a window [start, end) doubles exactly the positions congruent to
+    `end` modulo two. Luhn itself stays the confirmation step -- a window is only
+    reported after _luhn_valid agrees on the actual digits -- so the whole scan
+    is linear in the length of the run instead of quadratic.
+
+    Only the last PAN_MAX_DIGITS + 1 running sums are retained, in a ring
+    buffer, because no window reaches further back than that. Keeping a full
+    prefix array instead cost 84 MiB on a one-megabyte all-digit note, which
+    would have traded the quadratic time defect for an allocation one.
+    """
+    span = PAN_MAX_DIGITS + 1
+    even_history = [0] * span
+    odd_history = [0] * span
+    even_total = 0
+    odd_total = 0
+    for index, value in enumerate(run):
+        doubled = _DOUBLED_DIGIT[value]
+        if index % 2 == 0:
+            even_total += doubled
+            odd_total += value
+        else:
+            even_total += value
+            odd_total += doubled
+        end = index + 1
+        even_history[end % span] = even_total
+        odd_history[end % span] = odd_total
+        if end < PAN_MIN_DIGITS:
+            continue
+        if end % 2 == 0:
+            total, history = even_total, even_history
+        else:
+            total, history = odd_total, odd_history
+        for start in range(max(0, end - PAN_MAX_DIGITS), end - PAN_MIN_DIGITS + 1):
+            # history[start % span] still holds the sum at `start`: at most
+            # PAN_MAX_DIGITS entries have been written since, and the buffer
+            # holds one more than that.
+            if (total - history[start % span]) % 10 == 0 and _luhn_valid(
+                "".join(map(str, run[start:end]))
+            ):
+                return True
+    return False
+
+
+def _contains_pan(value: str) -> bool:
+    return any(_run_hides_a_pan(run) for run in _digit_runs(value))
+
+
+def _contains_truncated_pan_reference(value: str) -> bool:
+    """Truncated-PAN references, without swallowing ordinary reporting prose.
+
+    A mask, or a "first six ... last four" pair, is unambiguous. A bare ending
+    phrase is not: "the quarter ending in 2025" is a reporting period, not a
+    card. A four-digit calendar year after an ending phrase is therefore only
+    treated as a truncated PAN when the text also names a card number outright,
+    which is the trade the screen has to make in either direction. Non-year
+    groups such as 4242, and every five-digit group, still fail.
+    """
+    if _MASKED_DIGITS.search(value) or _FIRST_SIX_LAST_FOUR.search(value):
+        return True
+    names_a_card_number: bool | None = None
+    # chain, not a materialized tuple: the first prohibited match must be able
+    # to return without both patterns having scanned the whole string first.
+    for match in chain(
+        _ENDING_PHRASE_DIGITS.finditer(value),
+        _LABELLED_TRUNCATED_PAN.finditer(value),
+    ):
+        if match.groupdict().get("mask") is not None:
+            return True
+        if not _CALENDAR_YEAR.fullmatch(match.group("digits")):
+            return True
+        if names_a_card_number is None:
+            names_a_card_number = bool(_EXPLICIT_CARD_NUMBER_TOKEN.search(value))
+        if names_a_card_number:
+            return True
+    return False
+
+
+def _contains_bank_value(value: str) -> bool:
+    """Routing and account numbers, without catching the word "account" near a year.
+
+    The label alone is far too weak on its own in this corpus: "the account
+    ending in 2026 fiscal year" put a bare "account" within twelve characters of
+    a four-digit number and was reported as bank data. A qualifier such as
+    "number" still flags any following digits, and an unqualified label still
+    flags anything that is not a bare calendar year.
+    """
+    for match in _BANK_VALUE.finditer(value):
+        if match.group("qualifier") is not None:
+            return True
+        if not _CALENDAR_YEAR.fullmatch(match.group("digits")):
+            return True
+    return False
+
+
+def _screen_text(value: str) -> bool:
     if _SSN.search(value) or _EMAIL.search(value) or _CREDENTIAL.search(value):
         return True
-    for candidate in _PAN_CANDIDATE.finditer(value):
-        digits = re.sub(r"\D", "", candidate.group(0))
-        if 13 <= len(digits) <= 19 and _luhn_valid(digits):
-            return True
+    if _contains_pan(value):
+        return True
     if (
         _AUTHENTICATION_LABEL.search(value)
-        or _BANK_VALUE.search(value)
-        or _TRUNCATED_PAN.search(value)
-        or _UNLABELED_TRUNCATED_PAN.search(value)
+        or _contains_bank_value(value)
+        or _contains_truncated_pan_reference(value)
         or _LABELED_CREDENTIAL.search(value)
     ):
         return True
     return False
+
+
+def _string_contains_prohibited_data(value: str) -> bool:
+    """Screen the text as written, and again after NFKC normalization.
+
+    Text pasted out of a statement PDF routinely carries compatibility digit
+    forms and non-breaking separators that NFKC folds to the ASCII shapes these
+    screens are written against. Both forms are screened rather than only the
+    normalized one, so normalization can only add coverage and can never drop a
+    match the raw text would have produced.
+    """
+    if _screen_text(value):
+        return True
+    normalized = unicodedata.normalize("NFKC", value)
+    return normalized != value and _screen_text(normalized)
 
 
 def _string_contains_unsafe_text_control(value: str) -> bool:
@@ -374,6 +756,21 @@ def _string_contains_unsafe_text_control(value: str) -> bool:
         character not in "\t\n\r" and unicodedata.category(character) in {"Cc", "Cf"}
         for character in value
     )
+
+
+def _string_is_unencodable(value: str) -> bool:
+    """True for text that cannot be written back out as UTF-8.
+
+    json.loads turns a "\\udc80"-style escape into a lone surrogate, which
+    validates against every structural rule and then raises UnicodeEncodeError
+    at the moment anything serializes the record. Rejecting it here attributes
+    the failure to the record instead of to whatever tries to publish it.
+    """
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
 
 
 def _privacy_issues(value: Any, path: tuple[Any, ...] = ()) -> list[ValidationIssue]:
@@ -410,11 +807,50 @@ def _privacy_issues(value: Any, path: tuple[Any, ...] = ()) -> list[ValidationIs
                     "Text contains a control character that can obscure or reorder displayed content.",
                 )
             )
+        if _string_is_unencodable(value):
+            issues.append(
+                ValidationIssue(
+                    "unencodable_text",
+                    _pointer(path),
+                    "Text contains a code point that cannot be encoded as UTF-8.",
+                )
+            )
+    return issues
+
+
+def _signed_zero_issues(
+    value: Any, path: tuple[Any, ...] = ()
+) -> list[ValidationIssue]:
+    """Reject negative zero anywhere in the record.
+
+    JSON Schema compares -0.0 as equal to 0, so the `minimum: 0` bound on every
+    money and rate definition admits it unchanged, and the arithmetic rules then
+    reconcile because -0.00 == 0.00. It survives only into the published output,
+    where a nonnegative amount renders as "-0.00". It is never a meaningful
+    value in this contract, on signed fields either, so it is refused outright.
+    """
+    issues: list[ValidationIssue] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            issues.extend(_signed_zero_issues(child, (*path, key)))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            issues.extend(_signed_zero_issues(child, (*path, index)))
+    elif isinstance(value, (float, Decimal)) and not isinstance(value, bool):
+        number = _decimal(value)
+        if number is not None and number == 0 and number.is_signed():
+            issues.append(
+                ValidationIssue(
+                    "negative_zero",
+                    _pointer(path),
+                    "A signed negative zero is not an accepted amount or rate.",
+                )
+            )
     return issues
 
 
 def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
-    issues: list[ValidationIssue] = []
+    issues: list[ValidationIssue] = _signed_zero_issues(record)
 
     period = record.get("statement_period")
     if isinstance(period, dict):
@@ -495,8 +931,15 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
             if isinstance(group, dict)
         ]
         gross = _money_decimal(record.get("gross_processing_fees"))
-        if gross is not None and amounts and all(amount is not None for amount in amounts):
-            if sum((amount for amount in amounts if amount is not None), Decimal("0")) != gross:
+        if (
+            gross is not None
+            and amounts
+            and all(amount is not None for amount in amounts)
+        ):
+            if (
+                sum((amount for amount in amounts if amount is not None), Decimal("0"))
+                != gross
+            ):
                 issues.append(
                     ValidationIssue(
                         "fee_group_reconciliation",
@@ -542,7 +985,9 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
                 )
         elif net is not None:
             observed_rate = _decimal(rate)
-            expected_rate = (net / volume).quantize(RATE_QUANTUM, rounding=ROUND_HALF_UP)
+            expected_rate = (net / volume).quantize(
+                RATE_QUANTUM, rounding=ROUND_HALF_UP
+            )
             if observed_rate != expected_rate:
                 issues.append(
                     ValidationIssue(
@@ -576,6 +1021,230 @@ def _semantic_issues(record: dict[str, Any]) -> list[ValidationIssue]:
                     )
                 )
 
+    issues.extend(_contract_120_issues(record, volume=volume, rate=rate))
+    return issues
+
+
+def _contract_120_issues(
+    record: dict[str, Any], *, volume: Decimal | None, rate: Any
+) -> list[ValidationIssue]:
+    """Rules for the fields the 1.2.0 record contract adds.
+
+    Every one of these exists because a real acquirer statement broke the 1.1.0 contract:
+    a dual-priced account whose cardholder-funded offset had nowhere to go and could be
+    read two ways for a 115x spread; dormant months emitting four-digit percentages; and
+    annual charges silently inflating a single month's rate.
+    """
+    issues: list[ValidationIssue] = []
+    for name in ("comparable", "volume_disclosed"):
+        if not isinstance(record.get(name), bool):
+            issues.append(
+                ValidationIssue(
+                    "missing_disclosure_flag",
+                    f"/{name}",
+                    "A 1.2.0 record must state this boolean explicitly.",
+                )
+            )
+
+    # --- cardholder-funded fees -------------------------------------------------
+    funded_present = "cardholder_funded_fees" in record
+    if record.get("pricing_model") == "dual_pricing" and not funded_present:
+        issues.append(
+            ValidationIssue(
+                "dual_pricing_offset_required",
+                "/cardholder_funded_fees",
+                "A dual_pricing record must state cardholder_funded_fees, using 0.00 with a note when none were collected.",
+            )
+        )
+
+    borne = record.get("merchant_borne_processing_fees")
+    acceptance = record.get("net_cost_of_acceptance_rate")
+    if funded_present:
+        funded = _money_decimal(record.get("cardholder_funded_fees"))
+        net = _money_decimal(record.get("total_processing_fees"))
+        borne_value = _signed_money_decimal(borne)
+        if funded is None:
+            issues.append(
+                ValidationIssue(
+                    "money_precision",
+                    "/cardholder_funded_fees",
+                    "USD amounts must use no more than two decimal places.",
+                )
+            )
+        if borne_value is None:
+            issues.append(
+                ValidationIssue(
+                    "missing_derived_field",
+                    "/merchant_borne_processing_fees",
+                    "cardholder_funded_fees requires merchant_borne_processing_fees.",
+                )
+            )
+        if "net_cost_of_acceptance_rate" not in record:
+            issues.append(
+                ValidationIssue(
+                    "missing_derived_field",
+                    "/net_cost_of_acceptance_rate",
+                    "cardholder_funded_fees requires net_cost_of_acceptance_rate.",
+                )
+            )
+        if funded is not None and volume is not None and funded > volume:
+            issues.append(
+                ValidationIssue(
+                    "offset_exceeds_volume",
+                    "/cardholder_funded_fees",
+                    "Cardholder-funded fees are settled inside card volume and cannot exceed it.",
+                )
+            )
+        if funded is not None and net is not None and borne_value is not None:
+            if net - funded != borne_value:
+                issues.append(
+                    ValidationIssue(
+                        "merchant_borne_reconciliation",
+                        "/merchant_borne_processing_fees",
+                        "Merchant-borne fees must exactly equal net processing fees minus cardholder-funded fees.",
+                    )
+                )
+            base = None if volume is None else volume - funded
+            observed = _decimal(acceptance)
+            if base is not None and base > 0:
+                expected = (borne_value / base).quantize(
+                    RATE_QUANTUM, rounding=ROUND_HALF_UP
+                )
+                if observed != expected:
+                    issues.append(
+                        ValidationIssue(
+                            "acceptance_rate_mismatch",
+                            "/net_cost_of_acceptance_rate",
+                            "Net cost of acceptance does not match merchant-borne fees divided by merchant-retained volume.",
+                        )
+                    )
+            elif base is not None and acceptance is not None:
+                issues.append(
+                    ValidationIssue(
+                        "zero_base_acceptance_rate",
+                        "/net_cost_of_acceptance_rate",
+                        "Net cost of acceptance must be null when card volume net of cardholder-funded fees is zero.",
+                    )
+                )
+    else:
+        for name, value in (
+            ("merchant_borne_processing_fees", borne),
+            ("net_cost_of_acceptance_rate", acceptance),
+        ):
+            if name in record:
+                issues.append(
+                    ValidationIssue(
+                        "orphan_derived_field",
+                        f"/{name}",
+                        "This field requires cardholder_funded_fees.",
+                    )
+                )
+            del value
+
+    # --- non-recurring fees -----------------------------------------------------
+    if "non_recurring_fees" in record:
+        annual = _money_decimal(record.get("non_recurring_fees"))
+        gross = _money_decimal(record.get("gross_processing_fees"))
+        net = _money_decimal(record.get("total_processing_fees"))
+        recurring = record.get("recurring_effective_rate")
+        if annual is None:
+            issues.append(
+                ValidationIssue(
+                    "money_precision",
+                    "/non_recurring_fees",
+                    "USD amounts must use no more than two decimal places.",
+                )
+            )
+        if "recurring_effective_rate" not in record:
+            issues.append(
+                ValidationIssue(
+                    "missing_derived_field",
+                    "/recurring_effective_rate",
+                    "non_recurring_fees requires recurring_effective_rate.",
+                )
+            )
+        if annual is not None and gross is not None and annual > gross:
+            issues.append(
+                ValidationIssue(
+                    "non_recurring_exceeds_gross",
+                    "/non_recurring_fees",
+                    "Non-recurring fees are part of gross processing fees and cannot exceed them.",
+                )
+            )
+        if annual is not None and net is not None and volume is not None:
+            if volume > 0:
+                expected = ((net - annual) / volume).quantize(
+                    RATE_QUANTUM, rounding=ROUND_HALF_UP
+                )
+                if _decimal(recurring) != expected:
+                    issues.append(
+                        ValidationIssue(
+                            "recurring_rate_mismatch",
+                            "/recurring_effective_rate",
+                            "Recurring effective rate does not match net fees less non-recurring fees divided by card volume.",
+                        )
+                    )
+            elif recurring is not None:
+                issues.append(
+                    ValidationIssue(
+                        "zero_volume_rate",
+                        "/recurring_effective_rate",
+                        "Recurring effective rate must be null when card volume is zero.",
+                    )
+                )
+    elif "recurring_effective_rate" in record:
+        issues.append(
+            ValidationIssue(
+                "orphan_derived_field",
+                "/recurring_effective_rate",
+                "This field requires non_recurring_fees.",
+            )
+        )
+
+    # --- comparability ----------------------------------------------------------
+    comparable = record.get("comparable")
+    disclosed = record.get("volume_disclosed")
+    if comparable is True:
+        reason = None
+        if disclosed is False:
+            reason = "A record whose source did not disclose settled volume cannot claim comparability."
+        elif volume is not None and volume == 0:
+            reason = "A zero-volume record cannot claim comparability."
+        else:
+            observed = _decimal(rate)
+            if observed is not None and observed > RATE_COMPARABLE_MAXIMUM:
+                reason = "An effective rate above 100 percent is dominated by fixed fees and cannot claim comparability."
+        if reason is not None:
+            issues.append(ValidationIssue("not_comparable", "/comparable", reason))
+    if disclosed is False and volume is not None and volume != 0:
+        issues.append(
+            ValidationIssue(
+                "undisclosed_volume_nonzero",
+                "/card_volume",
+                "Card volume must be 0.00 when the source statement disclosed no settled volume total.",
+            )
+        )
+
+    groups = record.get("fee_groups")
+    if isinstance(groups, list):
+        for index, group in enumerate(groups):
+            if not isinstance(group, dict):
+                continue
+            # blended_discount exists only because the source fused interchange,
+            # assessments and markup into one undecomposable line, so it carries the
+            # same disclosure duty as an explicitly combined bucket.
+            fused = (
+                group.get("combined") is True
+                or group.get("category") == "blended_discount"
+            )
+            if fused and not isinstance(group.get("notes"), str):
+                issues.append(
+                    ValidationIssue(
+                        "combined_group_requires_note",
+                        f"/fee_groups/{index}/notes",
+                        "A combined fee group must name what the source statement merged into it.",
+                    )
+                )
     return issues
 
 
@@ -611,12 +1280,25 @@ def validation_result(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _csv_boolean(value: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    raise ValueError("boolean column must be true or false")
+
+
 def _record_from_csv(row: dict[str, str]) -> dict[str, Any]:
     groups = []
     for category in FEE_CATEGORIES:
         amount = Decimal(row[category])
         if amount != 0:
-            groups.append({"category": category, "amount": amount})
+            group: dict[str, Any] = {"category": category, "amount": amount}
+            # The flat template has one notes column and no per-group notes, so a
+            # blended discount — which must always say what the source fused into it —
+            # borrows that column rather than being unrepresentable in CSV.
+            if category == "blended_discount" and row.get("notes"):
+                group["notes"] = row["notes"]
+            groups.append(group)
     return {
         "schema_version": row["schema_version"],
         "calculation_basis": row["calculation_basis"],
@@ -639,7 +1321,32 @@ def _record_from_csv(row: dict[str, str]) -> dict[str, Any]:
         "pricing_model": row["pricing_model"],
         "fee_groups": groups or [{"category": "other", "amount": Decimal("0.00")}],
         "review_notes": [row["notes"]] if row["notes"] else [],
+        **_csv_120_fields(row),
     }
+
+
+def _csv_120_fields(row: dict[str, str]) -> dict[str, Any]:
+    """The 1.2.0 columns, omitted entirely for a 1.1.0 row so the older flat contract
+    keeps validating unchanged. A blank optional cell means absent; the literal `null`
+    means present-and-null, which a nullable derived rate legitimately needs."""
+    if row.get("schema_version") != "1.2.0":
+        return {}
+    fields: dict[str, Any] = {
+        "comparable": _csv_boolean(row["comparable"]),
+        "volume_disclosed": _csv_boolean(row["volume_disclosed"]),
+    }
+    if row.get("amex_acceptance"):
+        fields["amex_acceptance"] = row["amex_acceptance"]
+    for name in CSV_OPTIONAL_MONEY:
+        if row.get(name):
+            fields[name] = Decimal(row[name])
+    for name in CSV_OPTIONAL_RATE:
+        value = (row.get(name) or "").strip()
+        if value.lower() == "null":
+            fields[name] = None
+        elif value:
+            fields[name] = Decimal(value)
+    return fields
 
 
 def validate_csv_template(path: Path | str) -> list[ValidationIssue]:
@@ -720,28 +1427,44 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
         try:
             issues = validate_record(load_record(path))
         except ValueError:
-            issues = [ValidationIssue("parse_error", "/", "Record could not be parsed.")]
+            issues = [
+                ValidationIssue("parse_error", "/", "Record could not be parsed.")
+            ]
         if issues:
             unexpected.append({"file": path.name, "result": "unexpected_invalid"})
 
     invalid_dir = root / "test-vectors/invalid"
     invalid_files = {path.name for path in invalid_dir.glob("*.json")}
     if invalid_files != set(invalid_expectations):
-        unexpected.append(
-            {"file": "invalid-corpus", "result": "inventory_mismatch"}
-        )
+        unexpected.append({"file": "invalid-corpus", "result": "inventory_mismatch"})
     for filename, expected_codes in sorted(invalid_expectations.items()):
         path = invalid_dir / filename
         try:
             observed = {issue.code for issue in validate_record(load_record(path))}
         except (OSError, UnicodeError, ValueError) as exc:
             observed = {str(exc).split(":", maxsplit=1)[0]}
-        if not set(expected_codes).issubset(observed):
-            unexpected.append({"file": filename, "result": "expected_rule_not_observed"})
+        # Exact equality, not subset containment. Under subset semantics an
+        # invalid vector could emit any number of undeclared codes -- including
+        # ones that only appear because the vector is malformed in a second,
+        # unintended way -- and still be reported as reproducing the corpus.
+        if set(expected_codes) != observed:
+            missing = set(expected_codes) - observed
+            unexpected.append(
+                {
+                    "file": filename,
+                    "result": (
+                        "expected_rule_not_observed"
+                        if missing
+                        else "undeclared_rule_observed"
+                    ),
+                }
+            )
 
     csv_issues = validate_csv_template(root / "payment-statement-audit-template.csv")
     if csv_issues:
-        unexpected.append({"file": "payment-statement-audit-template.csv", "result": "invalid"})
+        unexpected.append(
+            {"file": "payment-statement-audit-template.csv", "result": "invalid"}
+        )
 
     return {
         "report_version": "1.0",
@@ -752,6 +1475,9 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
         "unexpected_results": len(unexpected),
         "unexpected": unexpected,
         "schema_sha256": _sha256(root / "schema/payment-statement-audit.schema.json"),
+        # State of the schema this validator actually loaded, so a consumer can
+        # tell a checksum-verified run from one where no declaration shipped.
+        "schema_integrity": schema_integrity_state(),
         "validator_sha256": _sha256(root / "tools/validate_audit.py"),
         "jsonschema_version": package_version("jsonschema"),
         "dependency_versions": {
@@ -762,7 +1488,7 @@ def build_corpus_report(root: Path | str = ROOT) -> dict[str, Any]:
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate a schema v1.1.0 Lifted Payments statement-audit JSON record."
+        description="Validate a schema v1.1.0 or v1.2.0 Lifted Payments statement-audit JSON record."
     )
     parser.add_argument("path", nargs="?", type=Path)
     parser.add_argument("--json", action="store_true", dest="as_json")
@@ -785,15 +1511,20 @@ def main(argv: list[str] | None = None) -> int:
             code = "input_read"
         else:
             candidate = str(exc).split(":", maxsplit=1)[0]
-            code = candidate if candidate in {
-                "duplicate_key",
-                "input_depth",
-                "input_size",
-                "invalid_json",
-                "invalid_root",
-                "non_finite_number",
-                "number_range",
-            } else "invalid_json"
+            code = (
+                candidate
+                if candidate
+                in {
+                    "duplicate_key",
+                    "input_depth",
+                    "input_size",
+                    "invalid_json",
+                    "invalid_root",
+                    "non_finite_number",
+                    "number_range",
+                }
+                else "invalid_json"
+            )
         report = {
             "validator_version": VALIDATOR_VERSION,
             "status": "invalid",
@@ -809,7 +1540,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.as_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     elif report["status"] == "valid":
-        print("VALID: record satisfies the schema v1.1.0 structural, accounting, and privacy rules.")
+        # SECURITY.md is explicit that pattern screening "cannot prove arbitrary
+        # prose contains no identifying or confidential information", so the
+        # success line reports what was actually established -- the structural
+        # and accounting rules passed, and no prohibited pattern matched -- and
+        # does not claim the record satisfies "privacy rules".
+        print(
+            "VALID: record satisfies the structural, accounting, and precision rules, "
+            "and no prohibited pattern was detected."
+        )
+        print(
+            "Pattern screening cannot establish that free text is free of identifying "
+            "or confidential information; human review is still required."
+        )
     else:
         print(f"INVALID: {report['issue_count']} rule violation(s).")
         for issue in report["issues"]:

@@ -15,14 +15,14 @@ tags:
 
 A processor-neutral data contract for turning monthly merchant payment-processing totals into a consistent, comparable audit record. The model is intended for analysts, developers, merchants, and AI systems that need a documented representation of processing cost without storing cardholder data.
 
-This distribution contains package version **1.1.7** and its schema **1.1.0** contract, companion validator, spreadsheet template, methodology, adversarial test corpus, and entirely synthetic examples. It is a reusable specification and demonstration package, not a collection of real merchant statements. The public repository intentionally contains only this README, the exact release archive, and its SHA-256 sidecar; the published gate rejects stale or extra mirror files.
+This distribution contains package version **1.2.0** and its schema **1.2.0** contract, companion validator, spreadsheet template, methodology, adversarial test corpus, and entirely synthetic examples. It is a reusable specification and demonstration package, not a collection of real merchant statements. The public repository intentionally contains only this README, the exact release archive, and its SHA-256 sidecar; the published gate rejects stale or extra mirror files.
 
 ## Persistent identity
 
 - Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/
-- Version DOI: https://doi.org/10.5281/zenodo.21766038
+- Version DOI: https://doi.org/10.5281/zenodo.21816571
 - Concept DOI: https://doi.org/10.5281/zenodo.21761714
-- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.7
+- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0
 - Source repository: https://github.com/Lifted-Holdings/payment-processing-resources
 
 ## Files
@@ -80,7 +80,7 @@ The included example is synthetic and describes no real merchant. Never add card
 
 ## Citation
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.7). Zenodo. https://doi.org/10.5281/zenodo.21766038
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.2.0). Zenodo. https://doi.org/10.5281/zenodo.21816571
 
 ## License
 

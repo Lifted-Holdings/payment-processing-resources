@@ -35,16 +35,19 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_release_manifest_has_one_explicit_versioned_identity(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("1.1.7", manifest["version"])
-        self.assertEqual("1.1.0", manifest["schema_version"])
-        self.assertEqual(
-            "10.5281/zenodo.21761714", manifest["concept_doi"]
-        )
+        self.assertEqual("1.2.0", manifest["version"])
+        # CONTRACT CHANGE: the record contract moved from schema 1.1.0 to 1.2.0
+        # (cardholder-funded fees, comparability, annual charges). The manifest,
+        # the JSON Schema `schema_version` const, and the synthetic example all
+        # declare 1.2.0, so pinning 1.1.0 here asserted a contract that no longer
+        # exists. The pin stays exact — it is retargeted, not relaxed.
+        self.assertEqual("1.2.0", manifest["schema_version"])
+        self.assertEqual("10.5281/zenodo.21761714", manifest["concept_doi"])
         self.assertEqual(
             "https://liftedpayments.com/payment-processing-statement-audit/",
             manifest["canonical_url"],
         )
-        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.1.7"))
+        self.assertTrue(manifest["source_release"].endswith("/releases/tag/v1.2.0"))
         self.assertEqual(len(manifest["files"]), len(set(manifest["files"])))
         self.assertGreaterEqual(len(manifest["files"]), 20)
 
@@ -57,7 +60,9 @@ class PublicationGateTests(unittest.TestCase):
             report["failed_check_count"],
             sum(check["status"] == "fail" for check in report["checks"]),
         )
-        self.assertIn("corpus_validation", {check["code"] for check in report["checks"]})
+        self.assertIn(
+            "corpus_validation", {check["code"] for check in report["checks"]}
+        )
         self.assertIn("dependency_lock", {check["code"] for check in report["checks"]})
         self.assertIn("utf8_text_assets", {check["code"] for check in report["checks"]})
         self.assertIn(
@@ -71,7 +76,11 @@ class PublicationGateTests(unittest.TestCase):
             self.assertEqual("blocked", report["status"])
             self.assertIn(
                 "version_doi_declared",
-                {check["code"] for check in report["checks"] if check["status"] == "fail"},
+                {
+                    check["code"]
+                    for check in report["checks"]
+                    if check["status"] == "fail"
+                },
             )
 
     def test_tagless_tree_is_blocked_in_default_candidate_mode(self):
@@ -122,7 +131,9 @@ class PublicationGateTests(unittest.TestCase):
             report = self.gate.build_publication_report(candidate)
 
             self.assertEqual("blocked", report["status"])
-            self.assertFalse((candidate / "candidate-validator-executed.marker").exists())
+            self.assertFalse(
+                (candidate / "candidate-validator-executed.marker").exists()
+            )
 
     def test_cli_package_mode_uses_package_validity_language(self):
         result = subprocess.run(
@@ -141,17 +152,20 @@ class PublicationGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             candidate = Path(directory) / "release"
             shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
-            with mock.patch.object(
-                self.gate,
-                "inspect_repository",
-                return_value=SimpleNamespace(
-                    publication_ready=True, head_commit="a" * 40
+            with (
+                mock.patch.object(
+                    self.gate,
+                    "inspect_repository",
+                    return_value=SimpleNamespace(
+                        publication_ready=True, head_commit="a" * 40
+                    ),
                 ),
-            ), mock.patch.object(
-                self.gate,
-                "attest_public_release",
-                return_value=SimpleNamespace(verified=True),
-            ) as attestor:
+                mock.patch.object(
+                    self.gate,
+                    "attest_public_release",
+                    return_value=SimpleNamespace(verified=True),
+                ) as attestor,
+            ):
                 report = self.gate.build_publication_report(candidate, mode="published")
 
         checks = {check["code"]: check["status"] for check in report["checks"]}
@@ -163,16 +177,19 @@ class PublicationGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             candidate = Path(directory) / "release"
             shutil.copytree(ROOT, candidate, ignore=shutil.ignore_patterns(".git"))
-            with mock.patch.object(
-                self.gate,
-                "inspect_repository",
-                return_value=SimpleNamespace(
-                    publication_ready=True, head_commit="a" * 40
+            with (
+                mock.patch.object(
+                    self.gate,
+                    "inspect_repository",
+                    return_value=SimpleNamespace(
+                        publication_ready=True, head_commit="a" * 40
+                    ),
                 ),
-            ), mock.patch.object(
-                self.gate,
-                "attest_public_release",
-                return_value=SimpleNamespace(verified=False),
+                mock.patch.object(
+                    self.gate,
+                    "attest_public_release",
+                    return_value=SimpleNamespace(verified=False),
+                ),
             ):
                 report = self.gate.build_publication_report(candidate, mode="published")
 
@@ -189,7 +206,9 @@ class PublicationGateTests(unittest.TestCase):
         self.assertNotIn("CVV 123", rendered)
         for check in report["checks"]:
             self.assertEqual(
-                {"code", "status", "message"}, set(check), "gate checks must stay value-free"
+                {"code", "status", "message"},
+                set(check),
+                "gate checks must stay value-free",
             )
 
     def test_cli_exit_code_matches_release_readiness(self):
@@ -349,11 +368,19 @@ class PublicationGateTests(unittest.TestCase):
             shutil.copytree(ROOT, candidate)
             validator_path = candidate / "tools/validate_audit.py"
             validator = validator_path.read_text(encoding="utf-8")
-            validator = validator.replace(
-                '_EMAIL = re.compile(r"\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", re.I)',
-                '_EMAIL = re.compile(r"$^")',
+            # Sabotage a screen the candidate suite asserts on, to prove the gate
+            # actually runs that suite rather than trusting the tree. Anchored on
+            # _SSN because it is a single physical line the formatter will not
+            # rewrap; _EMAIL was anchored here until it grew past the line limit
+            # and silently stopped matching, which made this test pass vacuously.
+            sabotaged = validator.replace(
+                '_SSN = re.compile(r"(?<!\\d)\\d{3}-\\d{2}-\\d{4}(?!\\d)")',
+                '_SSN = re.compile(r"$^")',
             )
-            self.assertIn('_EMAIL = re.compile(r"$^")', validator)
+            self.assertNotEqual(
+                validator, sabotaged, "sabotage anchor no longer matches"
+            )
+            validator = sabotaged
             validator_path.write_text(validator, encoding="utf-8")
 
             corpus = subprocess.run(
@@ -492,9 +519,7 @@ class PublicationGateTests(unittest.TestCase):
             self.assertEqual("fail", checks["public_content_safety"])
 
     def test_manifest_rejects_noncanonical_aliases_of_the_same_file(self):
-        paths, safe = self.gate._safe_file_paths(
-            ROOT, ["README.md", "./README.md"]
-        )
+        paths, safe = self.gate._safe_file_paths(ROOT, ["README.md", "./README.md"])
         self.assertFalse(safe)
         self.assertEqual([ROOT / "README.md"], paths)
 
@@ -536,9 +561,7 @@ class PublicationGateTests(unittest.TestCase):
             except OSError as exc:
                 self.skipTest(f"directory symlinks unavailable: {exc}")
 
-            paths, safe = self.gate._safe_file_paths(
-                candidate, ["alias/nested.txt"]
-            )
+            paths, safe = self.gate._safe_file_paths(candidate, ["alias/nested.txt"])
             self.assertFalse(safe)
             self.assertEqual([], paths)
 

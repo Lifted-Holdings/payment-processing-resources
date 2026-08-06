@@ -1,12 +1,12 @@
 {
   "title": "Lifted Payments Payment Statement Audit Model",
-  "version": "1.1.7",
-  "schema_version": "1.1.0",
-  "release_date": "2026-08-03",
-  "version_doi": "10.5281/zenodo.21766038",
+  "version": "1.2.0",
+  "schema_version": "1.2.0",
+  "release_date": "2026-08-05",
+  "version_doi": "10.5281/zenodo.21816571",
   "concept_doi": "10.5281/zenodo.21761714",
   "canonical_url": "https://liftedpayments.com/payment-processing-statement-audit/",
-  "source_release": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.7",
+  "source_release": "https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0",
   "license": "CC-BY-4.0",
   "files": [
     ".gitattributes",
@@ -63,6 +63,17 @@
     "tools/release_provenance.py",
     "tools/update_checksums.py",
     "tools/validate_audit.py",
-    "validation-report.json"
+    "validation-report.json",
+    "test-vectors/valid/dual-priced-month.json",
+    "test-vectors/valid/annual-fee-month.json",
+    "test-vectors/invalid/dual-pricing-offset-missing.json",
+    "test-vectors/invalid/merchant-borne-mismatch.json",
+    "test-vectors/invalid/dormant-month-claims-comparable.json",
+    "test-vectors/invalid/undisclosed-volume-nonzero.json",
+    "test-vectors/invalid/combined-group-missing-note.json",
+    "test-vectors/invalid/orphan-derived-field.json",
+    "test-vectors/invalid/negative-zero-credit.json",
+    "test-vectors/invalid/obfuscated-pan-in-note.json",
+    "test-vectors/invalid/lone-surrogate-note.json"
   ]
 }

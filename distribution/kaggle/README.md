@@ -1,13 +1,13 @@
 # Lifted Payments Payment Statement Audit Model
 
-This is the Kaggle distribution of package version **1.1.7** and schema **1.1.0** of the Lifted Payments Payment Statement Audit Model. Kaggle expands the immutable release archive for browsing and serves its SHA-256 sidecar alongside it. The published gate selects the unique latest public `Ready` version from Kaggle's version history, verifies its version-specific human page, reconstructs the expected transformed inventory from the canonical archive, then compares every path and byte without executing downloaded code.
+This is the Kaggle distribution of package version **1.2.0** and schema **1.2.0** of the Lifted Payments Payment Statement Audit Model. Kaggle expands the immutable release archive for browsing and serves its SHA-256 sidecar alongside it. The published gate selects the unique latest public `Ready` version from Kaggle's version history, verifies its version-specific human page, reconstructs the expected transformed inventory from the canonical archive, then compares every path and byte without executing downloaded code.
 
 ## Authoritative references
 
 - Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/
-- Version DOI: https://doi.org/10.5281/zenodo.21766038
+- Version DOI: https://doi.org/10.5281/zenodo.21816571
 - Concept DOI: https://doi.org/10.5281/zenodo.21761714
-- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.1.7
+- Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0
 - Source repository: https://github.com/Lifted-Holdings/payment-processing-resources
 
 ## What the files do
@@ -29,6 +29,6 @@ The model supports consistent analysis; it does not determine legal compliance, 
 
 ## Citation and license
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.1.7). Zenodo. https://doi.org/10.5281/zenodo.21766038
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.2.0). Zenodo. https://doi.org/10.5281/zenodo.21816571
 
 Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

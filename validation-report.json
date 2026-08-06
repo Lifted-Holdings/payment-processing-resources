@@ -6,14 +6,15 @@
     "referencing": "0.37.0",
     "rpds-py": "2026.6.3"
   },
-  "invalid_vectors": 17,
+  "invalid_vectors": 26,
   "jsonschema_version": "4.26.0",
   "report_version": "1.0",
-  "schema_sha256": "5979ec9c587be20ae723879f3863edb1f5a78ccddc848ca9a183b58532271730",
+  "schema_integrity": "verified",
+  "schema_sha256": "4085978674ec44e36be65e0e7688fdcda83e958f7769bceb82675bb29072df68",
   "status": "pass",
   "unexpected": [],
   "unexpected_results": 0,
-  "valid_vectors": 2,
-  "validator_sha256": "7c3b00b43fd2f0d25fe4cf6048798cb3acf3c9a52f7253d9c705911e879ad78b",
-  "validator_version": "1.1.7"
+  "valid_vectors": 4,
+  "validator_sha256": "8e776b06b4256114187209e87a2513ca760c15072c7d7c1bbd7170688f570934",
+  "validator_version": "1.2.0"
 }

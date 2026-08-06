@@ -25,7 +25,7 @@ average_ticket = round_half_up(card_volume / transaction_count, 2)
 
 When volume and count are zero, `effective_rate` and `average_ticket` are `null`. Fixed monthly fees may still make `total_processing_fees` positive. A percentage shown to people is `effective_rate × 100`; the JSON value remains a decimal.
 
-If a zero-activity statement also has zero processing fees, retain one explicit `other` fee group with amount `0.00`; schema v1.1.0 requires one fee-group entry and this convention avoids inventing a positive charge. CSV text cells beginning with `=`, `+`, `-`, or `@` (after leading whitespace) are rejected because spreadsheet software may interpret them as formulas.
+If a zero-activity statement also has zero processing fees, retain one explicit `other` fee group with amount `0.00`; schema v1.2.0 requires one fee-group entry and this convention avoids inventing a positive charge. CSV text cells beginning with `=`, `+`, `-`, or `@` (after leading whitespace) are rejected because spreadsheet software may interpret them as formulas.
 
 ## What the effective rate can and cannot show
 

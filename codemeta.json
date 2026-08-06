@@ -3,15 +3,15 @@
   "@type": "Dataset",
   "name": "Lifted Payments Payment Statement Audit Model",
   "description": "A processor-neutral, validated model for normalizing monthly merchant payment-processing statements without cardholder data.",
-  "version": "1.1.7",
-  "datePublished": "2026-08-03",
+  "version": "1.2.0",
+  "datePublished": "2026-08-05",
   "license": "https://creativecommons.org/licenses/by/4.0/",
-  "identifier": "https://doi.org/10.5281/zenodo.21766038",
+  "identifier": "https://doi.org/10.5281/zenodo.21816571",
   "url": "https://liftedpayments.com/payment-processing-statement-audit/",
   "sameAs": [
-    "https://doi.org/10.5281/zenodo.21766038",
+    "https://doi.org/10.5281/zenodo.21816571",
     "https://doi.org/10.5281/zenodo.21761714",
-    "https://zenodo.org/records/21766038"
+    "https://zenodo.org/records/21816571"
   ],
   "codeRepository": "https://github.com/Lifted-Holdings/payment-processing-resources",
   "creator": {

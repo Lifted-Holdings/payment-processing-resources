@@ -2,6 +2,20 @@
 
 All notable changes to the versioned dataset package are recorded here. Published release artifacts remain immutable.
 
+## Unreleased
+
+Validator availability and privacy-screening corrections. No change to the schema 1.2.0 record contract.
+
+- Remove quadratic backtracking from the note-privacy screens. The unbounded mask-run quantifiers in the truncated-PAN patterns made scanning cost grow with the square of the note length, so a record inside the one-megabyte input limit could occupy the validator for hours; a 16,000-character note took 47 seconds before the fix and 6 milliseconds after.
+- Screen card numbers over NFKC-normalized text and treat any Unicode space, punctuation, or format character as a digit separator, closing bypasses using U+00A0 and other non-breaking spaces, dot and middot separators, and compatibility digit forms. Card-number candidates are now matched as 13-to-19 digit windows inside longer digit runs, so an adjacent expiry or reference number no longer hides a PAN. Luhn remains the confirmation step.
+- Stop reporting ordinary reporting prose as prohibited payment data. An ending phrase followed by a four-digit calendar year, and the bare word "account" near a four-digit number, are no longer treated as truncated card or bank references unless the text names a card or account number outright.
+- Reject negative zero in any amount or rate. JSON Schema compares `-0.0` as equal to `0`, so a `minimum: 0` bound admitted it and the accounting rules reconciled, leaving `-0.00` to surface only in published output.
+- Verify the schema file against the SHA-256 that `checksums.txt` declares for it before using it to validate anything, and fail closed on disagreement. A copy that ships without `checksums.txt` still validates and reports its schema as `undeclared`, so offline and packaged use is unaffected.
+- Reject text containing unpaired surrogates, which pass every structural rule and then raise `UnicodeEncodeError` when the record is serialized.
+- Require each invalid corpus vector to emit exactly its declared rule codes instead of a superset, so an unintended second defect in a vector can no longer pass unnoticed.
+- Reword the CLI success line, which claimed a record "satisfies ... privacy rules" although `SECURITY.md` states that pattern screening cannot establish that prose is free of identifying information.
+- Add registered hostile vectors for negative zero, separator-obfuscated card numbers, and unpaired surrogates, plus regression coverage for scan growth, obfuscation, prose false positives, schema integrity, and corpus code exactness.
+
 ## 1.1.7 - 2026-08-03
 
 - Treat Kaggle's public version history as the immutable release index when its anonymous top-level current-version pointer lags behind a newly Ready version.
