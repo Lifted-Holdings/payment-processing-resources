@@ -133,13 +133,17 @@ CSV_OPTIONAL_RATE = ("net_cost_of_acceptance_rate", "recurring_effective_rate")
 # amount, or an invoice number butted up against it.
 PAN_MIN_DIGITS = 13
 PAN_MAX_DIGITS = 19
-# A punctuation separator (full stop, comma, middle dot ...) joins two digit
-# groups only when both are at least this long. Card masks group digits in fours, fives and
-# sixes; money and rates in audit prose are 1-3 digits then exactly two cents,
-# so this is what keeps "1,234.56 7,890.12 3,456.78" from being concatenated
-# into an 18-digit candidate. Space and dash separators join unconditionally,
-# which is exactly what the previous screen already did.
-PAN_PUNCTUATION_JOIN_MIN_GROUP = 3
+# Digits join across a gap of at most this many characters, none of which may be
+# a letter or a digit. The character CLASS of the separator is deliberately not
+# consulted: a screen that only joined across space and dash, or only across
+# punctuation between three-digit groups, missed "4111, 1111, 1111, 1111" as
+# well as "+", "=" and "~" separators and any PAN written in ones and twos.
+# Letters are what hold prose apart -- "2026-06-01 to 2026-06-30" breaks at
+# " to " -- and the gap bound stops two distant numbers from concatenating.
+PAN_MAX_GAP = 2
+# Cards group digits in fours, fives and sixes; money groups in threes with two
+# cents. A '.' or ',' therefore only joins groups at least this long.
+PAN_GROUP_MIN = 4
 # A card mask is short: the longest real one, "xxxx-xxxx-xxxx-", is fifteen
 # characters. Every mask quantifier below is bounded so each starting offset
 # costs a constant amount of backtracking rather than an amount that grows with
@@ -152,7 +156,10 @@ MAX_MASK_DIGIT_GAP = 8
 _MASK_CHARACTERS = "*xX\u00b7\u2022\u2023\u2027\u25cf\u25e6"
 
 _SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
-_EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
+_EMAIL = re.compile(
+    r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,4}\.[A-Z]{2,24}\b",
+    re.I,
+)
 _AUTHENTICATION_LABEL = re.compile(
     r"\b(?:cvv2?|cvc2?|cid|security\s*code|pin(?:\s*block)?)\b",
     re.I,
@@ -546,67 +553,68 @@ def _character_role(character: str) -> int:
     return role
 
 
-def _digit_runs(text: str) -> Iterable[list[int]]:
-    """Yield the digit runs long enough to hide a PAN, in one linear pass."""
-    run: list[int] = []
+def _digit_groups(text: str) -> Iterable[tuple[list[int], str]]:
+    """Split text into (digit group, following gap) pairs, in one linear pass."""
     group: list[int] = []
-    previous_group_length = 0
-    pending = 0  # 0 none, 1 free separator, 2 punctuation separator
+    gap: list[str] = []
+    for character in text:
+        digit = unicodedata.digit(character, -1) if character.isdigit() else -1
+        if digit >= 0:
+            if gap:
+                yield group, "".join(gap)
+                group, gap = [], []
+            group.append(digit)
+        elif group:
+            gap.append(character)
+        # characters before any digit are not part of a gap worth recording
+    if group:
+        yield group, "".join(gap)
 
-    def close_group() -> list[int] | None:
-        """Attach the finished group to the open run, or start a new run."""
-        nonlocal run, group, previous_group_length, pending
-        if not group:
-            return None
-        joins = run and (
-            pending == 1
-            or (
-                pending == 2
-                and previous_group_length >= PAN_PUNCTUATION_JOIN_MIN_GROUP
-                and len(group) >= PAN_PUNCTUATION_JOIN_MIN_GROUP
+
+def _digit_runs(text: str) -> Iterable[list[int]]:
+    """Yield the digit runs long enough to hide a PAN.
+
+    A gap joins two groups when it is at most PAN_MAX_GAP characters and holds
+    no letter. The separator's Unicode class is deliberately NOT consulted --
+    an earlier version only joined space and dash, or punctuation between
+    three-digit groups, and so missed `4111, 1111, 1111, 1111` (the way a person
+    actually writes a card number) along with `+`, `=` and `~` separators.
+
+    The one exception is '.' and ',', which also group money and rates. Those
+    join only between groups of PAN_GROUP_MIN or more digits, which is how cards
+    are grouped and how money never is: "4111, 1111" joins, while "1,234.56" and
+    a rate list like "0.0229 0.0195" do not. Letters hold prose apart, so
+    "2026-06-01 to 2026-06-30" cannot concatenate into a spurious window.
+
+    Deliberate obfuscation -- a PAN split across two notes, base64-encoded, or
+    written one digit at a time -- is out of scope and documented as such in
+    SECURITY.md. This screen is built to stop accidental disclosure.
+    """
+    run: list[int] = []
+    previous = 0
+    preceding_gap: str | None = None
+    for group, gap in _digit_groups(text):
+        joins = (
+            bool(run)
+            and preceding_gap is not None
+            and (
+                len(preceding_gap) <= PAN_MAX_GAP
+                and not any(character.isalpha() for character in preceding_gap)
+                and (
+                    not any(character in ".," for character in preceding_gap)
+                    or (previous >= PAN_GROUP_MIN and len(group) >= PAN_GROUP_MIN)
+                )
             )
         )
-        finished = None
-        if joins:
-            run.extend(group)
-        else:
-            finished = run
-            run = list(group)
-        previous_group_length = len(group)
-        group = []
-        pending = 0
-        return finished
-
-    def end_run() -> list[int] | None:
-        nonlocal run, previous_group_length, pending
-        finished = run
-        run = []
-        previous_group_length = 0
-        pending = 0
-        return finished
-
-    def long_enough(finished: list[int] | None) -> bool:
-        return bool(finished) and len(finished or ()) >= PAN_MIN_DIGITS
-
-    for character in text:
-        role = _character_role(character)
-        if role >= 0:
-            group.append(role)
-            continue
-        closed = close_group()
-        if long_enough(closed):
-            yield closed  # type: ignore[misc]
-        # close_group leaves `pending` alone when there was no group to close,
-        # so a truthy `pending` here means two separators in a row.
-        if role == _BREAK or pending:
-            ended = end_run()
-            if long_enough(ended):
-                yield ended  # type: ignore[misc]
-        elif run:
-            pending = 1 if role == _FREE_SEPARATOR else 2
-    for finished in (close_group(), end_run()):
-        if long_enough(finished):
-            yield finished  # type: ignore[misc]
+        if not joins:
+            if len(run) >= PAN_MIN_DIGITS:
+                yield run
+            run = []
+        run.extend(group)
+        previous = len(group)
+        preceding_gap = gap
+    if len(run) >= PAN_MIN_DIGITS:
+        yield run
 
 
 _DOUBLED_DIGIT = tuple(
