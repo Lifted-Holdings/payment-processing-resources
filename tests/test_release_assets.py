@@ -13,7 +13,31 @@ REPOSITORY_URL = "https://github.com/Lifted-Holdings/payment-processing-resource
 VERSION = "1.2.0"
 SCHEMA_VERSION = "1.2.0"
 RELEASE_DATE = "2026-08-05"
-DOI = "10.5281/zenodo.21766038"
+# The README states the release date in prose. Derive that prose from the pinned
+# ISO date instead of pinning it a second time: a stale literal "August 3, 2026"
+# survived the move to 2026-08-05 and asserted a date the release no longer had.
+# Locale-independent on purpose — strftime("%B") is not.
+_MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+_RELEASE_YEAR, _RELEASE_MONTH, _RELEASE_DAY = (
+    int(part) for part in RELEASE_DATE.split("-")
+)
+RELEASE_DATE_HUMAN = (
+    f"{_MONTH_NAMES[_RELEASE_MONTH - 1]} {_RELEASE_DAY}, {_RELEASE_YEAR}"
+)
+DOI = "10.5281/zenodo.21816571"
 DOI_URL = f"https://doi.org/{DOI}"
 CONCEPT_DOI_URL = "https://doi.org/10.5281/zenodo.21761714"
 RELEASE_URL = (
@@ -94,7 +118,9 @@ class ReleaseAssetTests(unittest.TestCase):
         self.assertEqual(metadata["name"], TITLE)
         self.assertEqual(metadata["version"], VERSION)
         self.assertEqual(metadata["datePublished"], RELEASE_DATE)
-        self.assertEqual(metadata["license"], "https://creativecommons.org/licenses/by/4.0/")
+        self.assertEqual(
+            metadata["license"], "https://creativecommons.org/licenses/by/4.0/"
+        )
         self.assertEqual(metadata["url"], CANONICAL_URL)
         self.assertEqual(metadata["codeRepository"], REPOSITORY_URL)
         self.assertEqual(metadata["creator"]["name"], "Lifted Payments")
@@ -129,7 +155,9 @@ class ReleaseAssetTests(unittest.TestCase):
 
         for field in schema["required"]:
             self.assertIn(field, example)
-        self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
+        self.assertEqual(
+            schema["$schema"], "https://json-schema.org/draft/2020-12/schema"
+        )
         self.assertAlmostEqual(
             example["effective_rate"],
             example["total_processing_fees"] / example["card_volume"],
@@ -145,7 +173,9 @@ class ReleaseAssetTests(unittest.TestCase):
             (ROOT / "RELEASE-MANIFEST.json").read_text(encoding="utf-8")
         )
         expected_files = set(manifest["files"]) - {"checksums.txt"}
-        checksum_lines = (ROOT / "checksums.txt").read_text(encoding="utf-8").splitlines()
+        checksum_lines = (
+            (ROOT / "checksums.txt").read_text(encoding="utf-8").splitlines()
+        )
         checksums = {}
         for line in checksum_lines:
             digest, filename = re.split(r"\s+", line.strip(), maxsplit=1)
@@ -176,9 +206,7 @@ class ReleaseAssetTests(unittest.TestCase):
                 encoding="utf-8",
             )
             repository_files = {
-                line.replace("\\", "/")
-                for line in result.stdout.splitlines()
-                if line
+                line.replace("\\", "/") for line in result.stdout.splitlines() if line
             }
         else:
             repository_files = portable_release_inventory()
@@ -214,7 +242,7 @@ class ReleaseAssetTests(unittest.TestCase):
 
         self.assertIn("## Versioned release", readme)
         self.assertIn("v1.2.0", readme)
-        self.assertIn("August 3, 2026", readme)
+        self.assertIn(RELEASE_DATE_HUMAN, readme)
         self.assertIn(CANONICAL_URL, readme)
         self.assertIn("CITATION.cff", readme)
         self.assertIn(DOI_URL, readme)
@@ -237,9 +265,7 @@ class ReleaseAssetTests(unittest.TestCase):
         _, frontmatter, body = card.split("---", maxsplit=2)
 
         self.assertRegex(frontmatter, r"(?m)^license: cc-by-4\.0$")
-        self.assertRegex(
-            frontmatter, rf'(?m)^pretty_name: "{re.escape(TITLE)}"$'
-        )
+        self.assertRegex(frontmatter, rf'(?m)^pretty_name: "{re.escape(TITLE)}"$')
         self.assertRegex(frontmatter, r"(?m)^- en$")
         for tag in ("tabular", "finance", "payments", "merchant-services"):
             self.assertRegex(frontmatter, rf"(?m)^- {re.escape(tag)}$")
@@ -255,9 +281,7 @@ class ReleaseAssetTests(unittest.TestCase):
         description_path = ROOT / "distribution/kaggle/README.md"
         self.assertTrue(metadata_path.is_file(), "Kaggle metadata is missing")
         self.assertTrue(description_path.is_file(), "Kaggle description is missing")
-        metadata = json.loads(
-            metadata_path.read_text(encoding="utf-8")
-        )
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         description = description_path.read_text(encoding="utf-8")
 
         self.assertEqual(metadata["id"], KAGGLE_DATASET_ID)

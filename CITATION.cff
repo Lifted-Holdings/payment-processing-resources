@@ -6,7 +6,7 @@ authors:
   - name: "Lifted Payments"
 version: 1.2.0
 date-released: 2026-08-05
-doi: "10.5281/zenodo.21766038"
+doi: "10.5281/zenodo.21816571"
 url: "https://liftedpayments.com/payment-processing-statement-audit/"
 repository-code: "https://github.com/Lifted-Holdings/payment-processing-resources"
 license: CC-BY-4.0

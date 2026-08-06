@@ -36,7 +36,12 @@ class PublicationGateTests(unittest.TestCase):
     def test_release_manifest_has_one_explicit_versioned_identity(self):
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
         self.assertEqual("1.2.0", manifest["version"])
-        self.assertEqual("1.1.0", manifest["schema_version"])
+        # CONTRACT CHANGE: the record contract moved from schema 1.1.0 to 1.2.0
+        # (cardholder-funded fees, comparability, annual charges). The manifest,
+        # the JSON Schema `schema_version` const, and the synthetic example all
+        # declare 1.2.0, so pinning 1.1.0 here asserted a contract that no longer
+        # exists. The pin stays exact — it is retargeted, not relaxed.
+        self.assertEqual("1.2.0", manifest["schema_version"])
         self.assertEqual("10.5281/zenodo.21761714", manifest["concept_doi"])
         self.assertEqual(
             "https://liftedpayments.com/payment-processing-statement-audit/",

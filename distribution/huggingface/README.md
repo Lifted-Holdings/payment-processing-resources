@@ -20,7 +20,7 @@ This distribution contains package version **1.2.0** and its schema **1.2.0** co
 ## Persistent identity
 
 - Canonical methodology: https://liftedpayments.com/payment-processing-statement-audit/
-- Version DOI: https://doi.org/10.5281/zenodo.21766038
+- Version DOI: https://doi.org/10.5281/zenodo.21816571
 - Concept DOI: https://doi.org/10.5281/zenodo.21761714
 - Versioned source release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0
 - Source repository: https://github.com/Lifted-Holdings/payment-processing-resources
@@ -80,7 +80,7 @@ The included example is synthetic and describes no real merchant. Never add card
 
 ## Citation
 
-> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.2.0). Zenodo. https://doi.org/10.5281/zenodo.21766038
+> Lifted Payments. (2026). *Lifted Payments Payment Statement Audit Model* (Version 1.2.0). Zenodo. https://doi.org/10.5281/zenodo.21816571
 
 ## License
 

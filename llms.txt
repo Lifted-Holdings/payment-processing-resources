@@ -3,7 +3,7 @@
 This public repository contains a processor-neutral payment processing statement audit model from Lifted Payments.
 
 Canonical guide: https://liftedpayments.com/payment-processing-statement-audit/
-Version DOI: https://doi.org/10.5281/zenodo.21766038
+Version DOI: https://doi.org/10.5281/zenodo.21816571
 Concept DOI: https://doi.org/10.5281/zenodo.21761714
 Versioned release: https://github.com/Lifted-Holdings/payment-processing-resources/releases/tag/v1.2.0
 Organization: https://liftedpayments.com/
